@@ -1,27 +1,28 @@
 #import <Photos/Photos.h>
 #import <UIKit/UIKit.h>
 
-@interface IFFeedCell
+// Inherit from NSObject to allow standard method calls
+@interface IFFeedCell : NSObject
 @property NSData *contentData;
 @end
 
-@interface IFFeedViewController
+@interface IFFeedViewController : NSObject
 @property IFFeedCell *activeCell;
 @end
 
-@interface IFAdViewcontroller
+@interface IFAdViewcontroller : NSObject
 @property IFFeedViewController *topViewController;
 @end
 
-@interface FNApplicationController
+@interface FNApplicationController : NSObject
 @property IFAdViewcontroller *adViewController;
 + (instancetype)instance;
 @end
 
-@interface FCSaveToGalleryActivity: UIActivity
+@interface FCSaveToGalleryActivity : UIActivity
 - (void)saveToGaleryEndedWithError:(NSError *)error;
 @end
 
-@interface IFNetworkClientImpl
+@interface IFNetworkClientImpl : NSObject
 - (NSString *)authorizationHeader;
 @end

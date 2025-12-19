@@ -25,7 +25,6 @@ jobs:
 
       - name: Install Dependencies
         run: |
-          # Install build tools using Homebrew (Standard on macOS runners)
           brew install make ldid dpkg
 
       - name: Setup Theos
@@ -38,7 +37,6 @@ jobs:
 
       - name: Setup iOS SDK
         run: |
-          # Download and setup the iOS SDK
           git clone --quiet -n --depth=1 --filter=tree:0 https://github.com/theos/sdks/
           cd sdks
           git sparse-checkout set --no-cone iPhoneOS14.5.sdk
@@ -48,27 +46,36 @@ jobs:
 
       - name: Build Tweak
         run: |
-          # Build the .deb file
           make package DEBUG=0 FINALPACKAGE=1
-
-          # Verify build
+          
+          # Verify .deb was created
           if [ ! -f packages/*.deb ]; then
-             echo "::error::Build failed! No .deb file found."
+             echo "::error::Build failed! No .deb file found in packages/ directory."
              exit 1
           fi
 
       - name: Download IPA
         run: |
-          wget "${{ github.event.inputs.ipa_url }}" --no-verbose -O ifunny.ipa
+          # Use curl -L to follow redirects (critical for many file hosts)
+          curl -L -o ifunny.ipa "${{ github.event.inputs.ipa_url }}"
+
+          # Verify IPA exists and is not empty
+          if [ ! -s ifunny.ipa ]; then
+             echo "::error::IPA download failed! File is empty or missing."
+             exit 1
+          fi
+          
+          # Debug: Print file size
+          ls -lh ifunny.ipa
 
       - name: Inject Tweak (Azule)
         run: |
-          # Clone Azule (Script to inject tweaks into IPAs)
           git clone --depth 1 https://github.com/Al4ise/Azule
           chmod +x Azule/azule
 
           # Find the generated .deb file
           DEB_FILE=$(ls packages/*.deb | head -n 1)
+          echo "Using DEB: $DEB_FILE"
 
           # Inject!
           # -s: Skip signing (User signs via AltStore/SideStore)

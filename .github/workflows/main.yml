@@ -9,87 +9,75 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    name: Build and Inject
+    runs-on: macos-latest
+    permissions:
+      contents: write
+
+    env:
+      THEOS: ${{ github.workspace }}/theos
+
     steps:
       - name: Checkout Repo
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           submodules: recursive
 
-      - name: Cache Theos & SDK
-        id: cache-theos
-        uses: actions/cache@v3
-        with:
-          path: theos
-          # FIX: Bumped to 'v6' to force a fresh download since the old cache was broken
-          key: theos-sdk-${{ runner.os }}-v6
+      - name: Install Dependencies
+        run: |
+          # Install build tools using Homebrew (Standard on macOS runners)
+          brew install make ldid dpkg
 
       - name: Setup Theos
-        if: steps.cache-theos.outputs.cache-hit != 'true'
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           repository: theos/theos
           path: theos
+          submodules: recursive
           ref: master
-          submodules: recursive  # FIX: Required to download vendor/lib and vendor/include
 
       - name: Setup iOS SDK
-        if: steps.cache-theos.outputs.cache-hit != 'true'
         run: |
-          curl -L -o sdk.zip https://github.com/theos/sdks/archive/master.zip
-          unzip -q sdk.zip
-          mkdir -p theos/sdks
-          mv sdks-master/iPhoneOS14.5.sdk theos/sdks/
-          rm -r sdks-master sdk.zip
-
-      - name: Install Dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends make perl zip unzip git xz-utils dpkg-dev fakeroot
-
-      - name: Install ldid
-        run: |
-          sudo curl -L -o /usr/local/bin/ldid https://github.com/ProcursusTeam/ldid/releases/download/v2.1.5-procursus7/ldid_linux_x86_64
-          sudo chmod +x /usr/local/bin/ldid
-
-      - name: Initialize Theos Vendor
-        run: |
-          # Safety check: Ensure vendor submodules are present
-          if [ -d "theos/bin" ]; then
-             cd theos
-             ./bin/update-theos
-             cd ..
-          fi
+          # Download and setup the iOS SDK
+          git clone --quiet -n --depth=1 --filter=tree:0 https://github.com/theos/sdks/
+          cd sdks
+          git sparse-checkout set --no-cone iPhoneOS14.5.sdk
+          git checkout
+          mkdir -p $THEOS/sdks
+          mv *.sdk $THEOS/sdks/
 
       - name: Build Tweak
         run: |
-          export THEOS=$(pwd)/theos
-          export THEOS_DEVICE_IP=localhost
-          export THEOS_DEVICE_PORT=123
-          
-          # Build Command with overrides for Linux packaging tools
-          make package FINALPACKAGE=1 messages=yes _THEOS_PLATFORM_DPKG_DEB=dpkg-deb THEOS_PACKAGE_COMPRESSION=gzip
-          
-          # Safely find the built dylib
-          mkdir build_output
-          find .theos -name "*.dylib" -exec cp {} build_output/iFunnier.dylib \;
-          
-          if [ ! -f build_output/iFunnier.dylib ]; then
-            echo "::error::Dylib not found! Build failed."
-            exit 1
+          # Build the .deb file
+          # We use debug=0 and finalpackage=1 for a release build
+          make package DEBUG=0 FINALPACKAGE=1
+
+          # Verify build
+          if [ ! -f packages/*.deb ]; then
+             echo "::error::Build failed! No .deb file found."
+             exit 1
           fi
 
       - name: Download IPA
         run: |
-          wget "${{ github.event.inputs.ipa_url }}" -O ifunny.ipa
+          wget "${{ github.event.inputs.ipa_url }}" --no-verbose -O ifunny.ipa
 
       - name: Inject Tweak (Azule)
         run: |
+          # Clone Azule (Script to inject tweaks into IPAs)
           git clone --depth 1 https://github.com/Al4ise/Azule
           chmod +x Azule/azule
-          
-          # Inject. We do NOT sign (-s) here. User signs locally.
-          ./Azule/azule -i ifunny.ipa -o iFunnier_Patched.ipa -f build_output/iFunnier.dylib -n "iFunnier"
+
+          # Find the generated .deb file
+          DEB_FILE=$(ls packages/*.deb | head -n 1)
+
+          # Inject!
+          # -i: Input IPA
+          # -o: Output IPA
+          # -f: Tweak file (.deb)
+          # -n: App Name
+          # -s: Skip signing (User signs via AltStore/SideStore)
+          ./Azule/azule -i ifunny.ipa -o iFunnier_Patched.ipa -f "$DEB_FILE" -n "iFunnier" -s
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4

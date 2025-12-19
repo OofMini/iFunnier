@@ -21,7 +21,8 @@ jobs:
         uses: actions/cache@v3
         with:
           path: theos
-          key: theos-sdk-${{ runner.os }}-v5
+          # FIX: Bumped to 'v6' to force a fresh download since the old cache was broken
+          key: theos-sdk-${{ runner.os }}-v6
 
       - name: Setup Theos
         if: steps.cache-theos.outputs.cache-hit != 'true'
@@ -30,6 +31,7 @@ jobs:
           repository: theos/theos
           path: theos
           ref: master
+          submodules: recursive  # FIX: Required to download vendor/lib and vendor/include
 
       - name: Setup iOS SDK
         if: steps.cache-theos.outputs.cache-hit != 'true'
@@ -43,14 +45,21 @@ jobs:
       - name: Install Dependencies
         run: |
           sudo apt-get update
-          # fakeroot and dpkg-dev are REQUIRED for packaging
           sudo apt-get install -y --no-install-recommends make perl zip unzip git xz-utils dpkg-dev fakeroot
 
       - name: Install ldid
         run: |
-          # Manually download ldid for Linux (needed for fake signing)
           sudo curl -L -o /usr/local/bin/ldid https://github.com/ProcursusTeam/ldid/releases/download/v2.1.5-procursus7/ldid_linux_x86_64
           sudo chmod +x /usr/local/bin/ldid
+
+      - name: Initialize Theos Vendor
+        run: |
+          # Safety check: Ensure vendor submodules are present
+          if [ -d "theos/bin" ]; then
+             cd theos
+             ./bin/update-theos
+             cd ..
+          fi
 
       - name: Build Tweak
         run: |
@@ -58,7 +67,7 @@ jobs:
           export THEOS_DEVICE_IP=localhost
           export THEOS_DEVICE_PORT=123
           
-          # FIX: explicit override for dpkg-deb and compression to prevent dm.pl error
+          # Build Command with overrides for Linux packaging tools
           make package FINALPACKAGE=1 messages=yes _THEOS_PLATFORM_DPKG_DEB=dpkg-deb THEOS_PACKAGE_COMPRESSION=gzip
           
           # Safely find the built dylib

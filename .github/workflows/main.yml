@@ -16,7 +16,15 @@ jobs:
         with:
           submodules: recursive
 
+      - name: Cache Theos & SDK
+        id: cache-theos
+        uses: actions/cache@v3
+        with:
+          path: theos
+          key: theos-sdk-${{ runner.os }}-v2
+
       - name: Setup Theos
+        if: steps.cache-theos.outputs.cache-hit != 'true'
         uses: actions/checkout@v3
         with:
           repository: theos/theos
@@ -24,6 +32,7 @@ jobs:
           ref: master
 
       - name: Setup iOS SDK
+        if: steps.cache-theos.outputs.cache-hit != 'true'
         run: |
           curl -L -o sdk.zip https://github.com/theos/sdks/archive/master.zip
           unzip -q sdk.zip
@@ -34,8 +43,8 @@ jobs:
       - name: Install Dependencies
         run: |
           sudo apt-get update
-          # Added 'dpkg-dev' to fix the "make package requires dm.pl" error
-          sudo apt-get install -y make perl zip unzip git xz-utils dpkg-dev
+          # FIX: Added 'fakeroot' which is required for Theos to build packages
+          sudo apt-get install -y --no-install-recommends make perl zip unzip git xz-utils dpkg-dev fakeroot ldid
 
       - name: Build Tweak
         run: |
@@ -43,8 +52,10 @@ jobs:
           export THEOS_DEVICE_IP=localhost
           export THEOS_DEVICE_PORT=123
           
-          # Build with debug=0 to strip symbols and reduce size
-          make package FINALPACKAGE=1 messages=yes
+          # OPTIMIZATION: Use 'make library' instead of 'make package'
+          # We only need the .dylib for injection. This skips the .deb creation step
+          # which was causing the "dm.pl" / "fakeroot" error.
+          make library FINALPACKAGE=1 messages=yes
           
           # Safely find the built dylib (recursive find)
           mkdir build_output
@@ -61,7 +72,7 @@ jobs:
 
       - name: Inject Tweak (Azule)
         run: |
-          git clone https://github.com/Al4ise/Azule
+          git clone --depth 1 https://github.com/Al4ise/Azule
           chmod +x Azule/azule
           
           # Inject. We do NOT sign (-s) here. User signs locally.

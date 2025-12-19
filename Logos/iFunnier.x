@@ -30,7 +30,7 @@
 
     // 3. LOGIC:
     if (gifURL) {
-        // It's a GIF, run default save (watermark removal on GIFs is often unsupported)
+        // It's a GIF, run default save
         %orig;
     } else if (image) {
         // SAFE CROP: Ensure image is actually large enough to crop
@@ -70,7 +70,6 @@
                         } completionHandler:^(BOOL success, NSError *error) {
                             [[NSFileManager defaultManager] removeItemAtPath:tmpPath error:nil];
                         }];
-                        // Skip %orig because we saved it manually
                     } else {
                         %orig;
                     }
@@ -86,7 +85,6 @@
         }
     }
     
-    // Close the menu
     [self saveToGaleryEndedWithError:nil];
 }
 
@@ -120,11 +118,7 @@
 %end
 
 %ctor {
-    // Initialize default hooks
     %init;
-    
-    // Dynamic initialization for Ad Blocking
-    // This prevents crashes if the class is renamed or missing in a future update.
     Class adClass = NSClassFromString(@"AdvertisementAvailableServiceImpl") ?: NSClassFromString(@"libFunny.AdvertisementAvailableServiceImpl");
     if (adClass) {
         %init(AdBlocking, AdvertisementAvailableServiceImpl = adClass);

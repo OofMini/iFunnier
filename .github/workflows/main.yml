@@ -55,51 +55,15 @@ jobs:
 
       - name: Download and Verify IPA
         run: |
-          # 1. Logic to fix Dropbox links to be direct downloads
-          url="${{ inputs.ipa_url }}"
-          
-          if [[ "$url" == *"dropbox.com"* ]]; then
-             # Remove existing dl=0 or dl=1
-             clean_url=$(echo "$url" | sed 's/[?&]dl=[01]//g')
-             
-             # Append ?dl=1 or &dl=1 depending on if query params exist
-             if [[ "$clean_url" == *"?"* ]]; then
-                url="${clean_url}&dl=1"
-             else
-                url="${clean_url}?dl=1"
-             fi
-             echo "Fixed Dropbox URL: $url"
-          fi
+          # Matches the working YTLite logic exactly
+          wget "${{ inputs.ipa_url }}" --no-verbose -O ifunny.ipa
 
-          echo "Downloading from: $url"
+          # Validate file type (Magic numbers check)
+          file_type=$(file --mime-type -b ifunny.ipa)
 
-          # 2. Download using wget (More robust for file hosting than curl)
-          # --user-agent: Mimics Chrome to avoid "unsupported browser" errors
-          # --max-redirect: Follows long redirect chains
-          wget --user-agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.114 Safari/537.36" \
-               --max-redirect=20 \
-               -O ifunny.ipa \
-               "$url"
-
-          # 3. Check if file is empty
-          if [ ! -s ifunny.ipa ]; then
-             echo "::error::Download failed. File is empty."
-             exit 1
-          fi
-
-          # 4. Check File Type (Debug info)
-          FILE_TYPE=$(file -b ifunny.ipa)
-          echo "Detected File Type: $FILE_TYPE"
-
-          # 5. Verify ZIP Integrity
-          if ! unzip -tq ifunny.ipa; then
-             echo "::error::CRITICAL: The file downloaded is NOT a valid IPA (Zip Archive)."
-             echo "::error::It is likely a website or error page."
-             echo "---------------------------------------------------"
-             echo "FILE CONTENT PREVIEW (First 10 lines):"
-             head -n 10 ifunny.ipa
-             echo "---------------------------------------------------"
-             exit 1
+          if [[ "$file_type" != "application/x-ios-app" && "$file_type" != "application/zip" ]]; then
+            echo "::error::Validation failed: The downloaded file is not a valid IPA. Detected type: $file_type."
+            exit 1
           fi
           
           echo "IPA verified successfully."

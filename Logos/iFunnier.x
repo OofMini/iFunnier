@@ -99,7 +99,8 @@
 
 - (instancetype)initWithNetworkClient:(IFNetworkClientImpl *)client {
     @try {
-        if (client && [client respondsToSelector:@selector(authorizationHeader)]) {
+        // FIX: Cast to (id) to ensure the compiler allows 'respondsToSelector' check
+        if (client && [(id)client respondsToSelector:@selector(authorizationHeader)]) {
             NSString *header = [client authorizationHeader];
             if (header && [header isKindOfClass:[NSString class]]) {
                 NSString *docsDir = [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES) objectAtIndex:0];

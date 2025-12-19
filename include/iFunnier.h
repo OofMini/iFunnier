@@ -1,12 +1,6 @@
 #import <Photos/Photos.h>
 #import <UIKit/UIKit.h>
 
-// Preferences
-BOOL enabled;
-BOOL blockAds;
-BOOL removeWatermarks;
-BOOL saveAnyContent;
-
 @interface IFFeedCell
 @property NSData *contentData;
 @end
@@ -26,6 +20,10 @@ BOOL saveAnyContent;
 
 @interface FCSaveToGalleryActivity: UIActivity
 - (void)saveToGaleryEndedWithError:(NSError *)error;
+@end
+
+@interface IFNetworkClientImpl
+- (NSString *)authorizationHeader;
 @end
 
 @interface IFNetworkClientImpl

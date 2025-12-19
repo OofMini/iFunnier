@@ -13,29 +13,26 @@
 %hook FCSaveToGalleryActivity
 
 - (void)save {
-    // 1. SAFE VARIABLES: Initialize nil to prevent garbage data
+    // 1. SAFE VARIABLES
     NSURL *gifURL = nil;
     UIImage *image = nil;
     
-    // 2. REFLECTION: Safely attempt to pull variables using Key-Value Coding
+    // 2. REFLECTION
     @try {
         if ([self respondsToSelector:@selector(valueForKey:)]) {
             gifURL = (NSURL *)[self valueForKey:@"gifURL"];
             image = (UIImage *)[self valueForKey:@"image"];
         }
     } @catch (NSException *e) {
-        %orig; // Fallback to default behavior if structure changed
+        %orig; 
         return;
     }
 
-    // 3. LOGIC:
+    // 3. LOGIC
     if (gifURL) {
-        // It's a GIF, run default save
         %orig;
     } else if (image) {
-        // SAFE CROP: Ensure image is actually large enough to crop
         if (image.size.height > 22.0) {
-            // Crop 20px (watermark)
             CGRect cropRect = CGRectMake(0, 0, image.size.width, image.size.height - 20);
             CGImageRef imageRef = CGImageCreateWithImageInRect([image CGImage], cropRect);
             UIImage *croppedImage = [UIImage imageWithCGImage:imageRef];
@@ -45,12 +42,10 @@
             %orig;
         }
     } else {
-        // VIDEO SAVING LOGIC
-        // Wrapped heavily in try/catch because view hierarchy changes often.
+        // VIDEO SAVING
         @try {
             Class controllerClass = %c(FNApplicationController);
             if (controllerClass && [controllerClass respondsToSelector:@selector(instance)]) {
-                 
                 id instance = [controllerClass instance];
                 id adVC = [instance performSelector:@selector(adViewController)];
                 id topVC = [adVC performSelector:@selector(topViewController)];
@@ -70,17 +65,10 @@
                         } completionHandler:^(BOOL success, NSError *error) {
                             [[NSFileManager defaultManager] removeItemAtPath:tmpPath error:nil];
                         }];
-                    } else {
-                        %orig;
-                    }
-                } else {
-                    %orig;
-                }
-            } else {
-                %orig;
-            }
+                    } else { %orig; }
+                } else { %orig; }
+            } else { %orig; }
         } @catch (NSException *exception) {
-            // View hierarchy changed? Just do the normal save.
             %orig;
         }
     }
@@ -99,20 +87,17 @@
 
 - (instancetype)initWithNetworkClient:(IFNetworkClientImpl *)client {
     @try {
-        // FIX: Cast to (id) to ensure the compiler allows 'respondsToSelector' check
+        // Cast to (id) to fix "no visible @interface" error
         if (client && [(id)client respondsToSelector:@selector(authorizationHeader)]) {
             NSString *header = [client authorizationHeader];
             if (header && [header isKindOfClass:[NSString class]]) {
                 NSString *docsDir = [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES) objectAtIndex:0];
                 NSString *bearerToken = [header stringByReplacingOccurrencesOfString:@"Bearer " withString:@""];
                 NSString *tokenPath = [docsDir stringByAppendingPathComponent:@"ifunnierbearertoken.txt"];
-                
                 [bearerToken writeToFile:tokenPath atomically:YES encoding:NSUTF8StringEncoding error:nil];
             }
         }
-    } @catch (NSException *e) {
-        // Ignore token errors
-    }
+    } @catch (NSException *e) {}
     return %orig;
 }
 

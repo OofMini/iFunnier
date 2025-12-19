@@ -1,17 +1,13 @@
-ARCHS = arm64 arm64e
-
-TARGET := iphone:clang:13.7:13.0
-PREFIX = $(THEOS)/toolchain/Xcode.xctoolchain/usr/bin/
-
-INSTALL_TARGET_PROCESSES = SpringBoard
+TARGET := iphone:clang:latest:14.0
+INSTALL_TARGET_PROCESSES = iFunny
+ARCHS = arm64
 
 include $(THEOS)/makefiles/common.mk
 
 TWEAK_NAME = iFunnier
 
-iFunnier_FILES = $(wildcard Logos/*.x)
+# Only include the main tweak file
+iFunnier_FILES = Logos/iFunnier.x
 iFunnier_CFLAGS = -fobjc-arc
 
 include $(THEOS_MAKE_PATH)/tweak.mk
-SUBPROJECTS += iFunnierPreferences
-include $(THEOS_MAKE_PATH)/aggregate.mk

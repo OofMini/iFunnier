@@ -26,6 +26,12 @@ jobs:
       - name: Install Dependencies
         run: |
           brew install make ldid dpkg
+          
+          # Manually install optool to prevent Azule from failing to download it
+          # We download a known working binary for macOS
+          curl -L -o optool https://github.com/alexzielenski/optool/releases/download/0.1/optool
+          chmod +x optool
+          sudo mv optool /usr/local/bin/
 
       - name: Setup Theos
         uses: actions/checkout@v4
@@ -48,38 +54,54 @@ jobs:
         run: |
           make package DEBUG=0 FINALPACKAGE=1
           
-          # Verify .deb was created
           if [ ! -f packages/*.deb ]; then
-             echo "::error::Build failed! No .deb file found in packages/ directory."
+             echo "::error::Build failed! No .deb file found."
              exit 1
           fi
 
-      - name: Download IPA
+      - name: Download and Verify IPA
         run: |
-          # Use curl -L to follow redirects (critical for many file hosts)
-          curl -L -o ifunny.ipa "${{ github.event.inputs.ipa_url }}"
+          echo "Downloading IPA..."
+          # -L follows redirects, -f fails on HTTP errors
+          curl -L -f -o ifunny.ipa "${{ github.event.inputs.ipa_url }}"
 
-          # Verify IPA exists and is not empty
+          # 1. Check if file exists and has size
           if [ ! -s ifunny.ipa ]; then
-             echo "::error::IPA download failed! File is empty or missing."
+             echo "::error::Download failed. File is empty or missing."
+             exit 1
+          fi
+
+          # 2. Check File Size (iFunny should be > 50MB)
+          FILE_SIZE=$(stat -f%z ifunny.ipa)
+          echo "Downloaded file size: $FILE_SIZE bytes"
+          
+          # 20MB threshold (20 * 1024 * 1024 = 20971520)
+          if [ "$FILE_SIZE" -lt 20971520 ]; then
+             echo "::error::File is too small ($FILE_SIZE bytes). This is likely an HTML page or error message, not the real IPA."
+             echo "::error::Please check your download link. It must be a DIRECT link to the .ipa file."
+             exit 1
+          fi
+
+          # 3. Check if it is a valid ZIP archive
+          echo "Verifying ZIP integrity..."
+          if ! unzip -tq ifunny.ipa; then
+             echo "::error::The downloaded file is not a valid IPA/ZIP archive."
              exit 1
           fi
           
-          # Debug: Print file size
-          ls -lh ifunny.ipa
+          echo "IPA verified successfully."
 
       - name: Inject Tweak (Azule)
         run: |
           git clone --depth 1 https://github.com/Al4ise/Azule
           chmod +x Azule/azule
 
-          # Find the generated .deb file
           DEB_FILE=$(ls packages/*.deb | head -n 1)
           echo "Using DEB: $DEB_FILE"
 
-          # Inject!
-          # -s: Skip signing (User signs via AltStore/SideStore)
-          ./Azule/azule -i ifunny.ipa -o iFunnier_Patched.ipa -f "$DEB_FILE" -n "iFunnier" -s
+          # Inject using Azule
+          # We use absolute paths to be safe
+          ./Azule/azule -i "$(pwd)/ifunny.ipa" -o "$(pwd)/iFunnier_Patched.ipa" -f "$DEB_FILE" -n "iFunnier" -s
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4

@@ -1,0 +1,73 @@
+name: Build iFunnier IPA
+
+on:
+  workflow_dispatch:
+    inputs:
+      ipa_url:
+        description: 'Direct URL to iFunny IPA'
+        required: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repo
+        uses: actions/checkout@v3
+        with:
+          submodules: recursive
+
+      - name: Setup Theos
+        uses: actions/checkout@v3
+        with:
+          repository: theos/theos
+          path: theos
+          ref: master
+
+      - name: Setup iOS SDK
+        run: |
+          curl -L -o sdk.zip https://github.com/theos/sdks/archive/master.zip
+          unzip -q sdk.zip
+          mkdir -p theos/sdks
+          mv sdks-master/iPhoneOS14.5.sdk theos/sdks/
+          rm -r sdks-master sdk.zip
+
+      - name: Install Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y make perl zip unzip git xz-utils
+
+      - name: Build Tweak
+        run: |
+          export THEOS=$(pwd)/theos
+          export THEOS_DEVICE_IP=localhost
+          export THEOS_DEVICE_PORT=123
+          
+          # Build with debug=0 to strip symbols and reduce size
+          make package FINALPACKAGE=1
+          
+          # Safely find the built dylib (recursive find)
+          mkdir build_output
+          find .theos -name "*.dylib" -exec cp {} build_output/iFunnier.dylib \;
+          
+          if [ ! -f build_output/iFunnier.dylib ]; then
+            echo "::error::Dylib not found! Build failed."
+            exit 1
+          fi
+
+      - name: Download IPA
+        run: |
+          wget "${{ github.event.inputs.ipa_url }}" -O ifunny.ipa
+
+      - name: Inject Tweak (Azule)
+        run: |
+          git clone https://github.com/Al4ise/Azule
+          chmod +x Azule/azule
+          
+          # Inject. We do NOT sign (-s) here. User signs locally.
+          ./Azule/azule -i ifunny.ipa -o iFunnier_Patched.ipa -f build_output/iFunnier.dylib -n "iFunnier"
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: iFunnier-Patched-IPA
+          path: iFunnier_Patched.ipa

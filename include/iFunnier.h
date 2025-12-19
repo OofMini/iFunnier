@@ -25,7 +25,3 @@
 @interface IFNetworkClientImpl
 - (NSString *)authorizationHeader;
 @end
-
-@interface IFNetworkClientImpl
-- (NSString *)authorizationHeader;
-@end

@@ -43,7 +43,7 @@ jobs:
           export THEOS_DEVICE_PORT=123
           
           # Build with debug=0 to strip symbols and reduce size
-          make package FINALPACKAGE=1
+          make package FINALPACKAGE=1 messages=yes
           
           # Safely find the built dylib (recursive find)
           mkdir build_output

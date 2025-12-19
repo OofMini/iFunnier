@@ -34,7 +34,8 @@ jobs:
       - name: Install Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y make perl zip unzip git xz-utils
+          # Added 'dpkg-dev' to fix the "make package requires dm.pl" error
+          sudo apt-get install -y make perl zip unzip git xz-utils dpkg-dev
 
       - name: Build Tweak
         run: |

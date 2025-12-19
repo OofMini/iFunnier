@@ -21,7 +21,7 @@ jobs:
         uses: actions/cache@v3
         with:
           path: theos
-          key: theos-sdk-${{ runner.os }}-v4
+          key: theos-sdk-${{ runner.os }}-v5
 
       - name: Setup Theos
         if: steps.cache-theos.outputs.cache-hit != 'true'
@@ -43,12 +43,12 @@ jobs:
       - name: Install Dependencies
         run: |
           sudo apt-get update
-          # fakeroot and dpkg-dev are required for 'make package' to work
+          # fakeroot and dpkg-dev are REQUIRED for packaging
           sudo apt-get install -y --no-install-recommends make perl zip unzip git xz-utils dpkg-dev fakeroot
 
       - name: Install ldid
         run: |
-          # Manually download ldid for Linux
+          # Manually download ldid for Linux (needed for fake signing)
           sudo curl -L -o /usr/local/bin/ldid https://github.com/ProcursusTeam/ldid/releases/download/v2.1.5-procursus7/ldid_linux_x86_64
           sudo chmod +x /usr/local/bin/ldid
 
@@ -58,8 +58,8 @@ jobs:
           export THEOS_DEVICE_IP=localhost
           export THEOS_DEVICE_PORT=123
           
-          # FIX: Switched back to 'make package' now that dependencies are fixed.
-          make package FINALPACKAGE=1 messages=yes
+          # FIX: explicit override for dpkg-deb and compression to prevent dm.pl error
+          make package FINALPACKAGE=1 messages=yes _THEOS_PLATFORM_DPKG_DEB=dpkg-deb THEOS_PACKAGE_COMPRESSION=gzip
           
           # Safely find the built dylib
           mkdir build_output

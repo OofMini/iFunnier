@@ -49,7 +49,6 @@ jobs:
       - name: Build Tweak
         run: |
           # Build the .deb file
-          # We use debug=0 and finalpackage=1 for a release build
           make package DEBUG=0 FINALPACKAGE=1
 
           # Verify build
@@ -72,10 +71,6 @@ jobs:
           DEB_FILE=$(ls packages/*.deb | head -n 1)
 
           # Inject!
-          # -i: Input IPA
-          # -o: Output IPA
-          # -f: Tweak file (.deb)
-          # -n: App Name
           # -s: Skip signing (User signs via AltStore/SideStore)
           ./Azule/azule -i ifunny.ipa -o iFunnier_Patched.ipa -f "$DEB_FILE" -n "iFunnier" -s
 

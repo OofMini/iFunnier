@@ -21,7 +21,7 @@ jobs:
         uses: actions/cache@v3
         with:
           path: theos
-          key: theos-sdk-${{ runner.os }}-v2
+          key: theos-sdk-${{ runner.os }}-v3
 
       - name: Setup Theos
         if: steps.cache-theos.outputs.cache-hit != 'true'
@@ -43,8 +43,14 @@ jobs:
       - name: Install Dependencies
         run: |
           sudo apt-get update
-          # FIX: Added 'fakeroot' which is required for Theos to build packages
-          sudo apt-get install -y --no-install-recommends make perl zip unzip git xz-utils dpkg-dev fakeroot ldid
+          # Removed 'ldid' from here because it is not in Ubuntu repos
+          sudo apt-get install -y --no-install-recommends make perl zip unzip git xz-utils dpkg-dev fakeroot
+
+      - name: Install ldid
+        run: |
+          # Manually download ldid for Linux from Procursus (trusted source)
+          sudo curl -L -o /usr/local/bin/ldid https://github.com/ProcursusTeam/ldid/releases/download/v2.1.5-procursus7/ldid_linux_x86_64
+          sudo chmod +x /usr/local/bin/ldid
 
       - name: Build Tweak
         run: |
@@ -52,12 +58,10 @@ jobs:
           export THEOS_DEVICE_IP=localhost
           export THEOS_DEVICE_PORT=123
           
-          # OPTIMIZATION: Use 'make library' instead of 'make package'
-          # We only need the .dylib for injection. This skips the .deb creation step
-          # which was causing the "dm.pl" / "fakeroot" error.
+          # Use 'make library' to skip .deb packaging (avoids some errors)
           make library FINALPACKAGE=1 messages=yes
           
-          # Safely find the built dylib (recursive find)
+          # Safely find the built dylib
           mkdir build_output
           find .theos -name "*.dylib" -exec cp {} build_output/iFunnier.dylib \;
           

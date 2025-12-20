@@ -12,7 +12,7 @@ jobs:
     name: Build and Inject
     runs-on: macos-latest
     permissions:
-      contents: write  # REQUIRED for releases
+      contents: write
 
     env:
       THEOS: ${{ github.workspace }}/theos
@@ -26,7 +26,6 @@ jobs:
       - name: Install Dependencies
         run: |
           brew install make ldid dpkg wget
-          # Install Pyzule (Cyan)
           pipx install --force https://github.com/asdfzxcvbn/pyzule-rw/archive/main.zip
 
       - name: Setup Theos
@@ -50,7 +49,6 @@ jobs:
         run: |
           make package DEBUG=0 FINALPACKAGE=1
           
-          # Move to clean path for Pyzule
           mkdir -p ${{ github.workspace }}/build_output
           mv packages/*.deb ${{ github.workspace }}/build_output/iFunnier.deb
           
@@ -79,12 +77,13 @@ jobs:
       - name: Create Draft Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.3-${{ github.run_number }}
-          name: iFunnier v1.3 (Build ${{ github.run_number }})
+          tag_name: v1.4-${{ github.run_number }}
+          name: iFunnier v1.4 (Build ${{ github.run_number }})
           files: ${{ github.workspace }}/iFunnier_Patched.ipa
           draft: true
           body: |
-            ### iFunnier Build ${{ github.run_number }}
+            ### iFunnier v1.4
             - **Source IPA**: ${{ inputs.ipa_url }}
-            - **Injection Tool**: Cyan (Pyzule)
+            - **Injection Tool**: Cyan
+            - **Menu**: Triple-Tap Screen
             - **Status**: Draft Release

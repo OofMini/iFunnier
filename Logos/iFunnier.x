@@ -2,7 +2,7 @@
 #import <UIKit/UIKit.h>
 #import <AVFoundation/AVFoundation.h>
 
-// --- PREFS KEYS ---
+// --- PREFS ---
 #define kIFBlockAds @"kIFBlockAds"
 #define kIFBlockUpsells @"kIFBlockUpsells"
 #define kIFNoWatermark @"kIFNoWatermark"
@@ -26,89 +26,53 @@ void showToast(NSString *msg) {
 BOOL en(NSString *k) { return [[NSUserDefaults standardUserDefaults] boolForKey:k]; }
 BOOL ads() { return en(kIFBlockAds); }
 
-// --- UI CLEANER ENGINE (v6.0) ---
+// --- UI CLEANER (Scorched Earth) ---
 %group UICleaner
 
-void nukeView(UIView *v) {
+void nuke(UIView *v) {
     if (!v) return;
     v.hidden = YES;
     v.alpha = 0;
     v.userInteractionEnabled = NO;
     v.backgroundColor = [UIColor clearColor];
-    
     CGRect f = v.frame;
     f.size.height = 0;
     f.size.width = 0;
     v.frame = f;
 }
 
-// 1. Text Cleaner (Added "Report" and "Sponsored")
-%hook UILabel
-- (void)setText:(NSString *)text {
-    %orig;
-    if (ads() && text.length > 0) {
-        NSString *clean = [text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
-        
-        // Holiday / Sale / Premium
-        if ([clean localizedCaseInsensitiveContainsString:@"Holiday"] || 
-            [clean localizedCaseInsensitiveContainsString:@"Sale"] || 
-            [clean localizedCaseInsensitiveContainsString:@"Premium"] ||
-            [clean localizedCaseInsensitiveContainsString:@"Offer"]) {
-            
-            if (clean.length < 35) { 
-                self.hidden = YES;
-                nukeView(self.superview); 
-            }
-        }
-        
-        // Hide Ads / Report Ad
-        if ([clean localizedCaseInsensitiveContainsString:@"Hide Ads"] || 
-            [clean localizedCaseInsensitiveContainsString:@"Remove Ads"] ||
-            [clean localizedCaseInsensitiveContainsString:@"Report"] || 
-            [clean localizedCaseInsensitiveContainsString:@"Sponsored"]) {
-            
-            self.hidden = YES;
-            // Scan up to kill the container
-            UIView *p = self.superview;
-            for (int i=0; i<8; i++) {
-                if (!p) break;
-                if (p.frame.size.height > 20 && p.frame.size.height < 180) nukeView(p);
-                p = p.superview;
-            }
-        }
-    }
-}
-
-// 2. Attributed Text
-- (void)setAttributedText:(NSAttributedString *)text {
-    %orig;
-    if (ads() && text.string.length > 0) {
-        NSString *str = text.string;
-        if ([str localizedCaseInsensitiveContainsString:@"Holiday"] || 
-            [str localizedCaseInsensitiveContainsString:@"Sale"] ||
-            [str localizedCaseInsensitiveContainsString:@"Report"]) {
-            if (str.length < 35) {
-                self.hidden = YES;
-                nukeView(self.superview);
-            }
-        }
-    }
-}
-%end
-
-// 3. Image & Accessibility Cleaner (Fixes Sidebar Holiday)
+// 1. Universal View Scanner (Catches Sidebar & Report Button)
 %hook UIView
 - (void)layoutSubviews {
     %orig;
     if (ads()) {
-        // Check Accessibility Label (Used by SwiftUI Sidebar)
-        NSString *ax = self.accessibilityLabel ?: @"";
-        if (ax.length > 0 && ([ax localizedCaseInsensitiveContainsString:@"Holiday"] || [ax localizedCaseInsensitiveContainsString:@"Sale"])) {
-            nukeView(self);
-            return;
+        // A. Accessibility Scan (Crucial for SwiftUI Sidebar)
+        NSString *ax = self.accessibilityLabel;
+        if (ax && [ax isKindOfClass:[NSString class]]) {
+            if ([ax localizedCaseInsensitiveContainsString:@"Holiday"] || 
+                [ax localizedCaseInsensitiveContainsString:@"Sale"] ||
+                [ax localizedCaseInsensitiveContainsString:@"Sponsored"] ||
+                [ax localizedCaseInsensitiveContainsString:@"Report"]) {
+                nuke(self);
+                return; 
+            }
         }
 
-        // Bottom Vacuum (Gray Bar Fix)
+        // B. Button Label Scan (Report Button)
+        if ([self isKindOfClass:[UIButton class]]) {
+            UIButton *btn = (UIButton *)self;
+            NSString *t = btn.currentTitle ?: @"";
+            if ([t localizedCaseInsensitiveContainsString:@"Report"] || 
+                [t localizedCaseInsensitiveContainsString:@"Hide"] ||
+                [t localizedCaseInsensitiveContainsString:@"Remove"]) {
+                nuke(self);
+                // Kill parent if it's a small container
+                if (self.superview.frame.size.height < 100) nuke(self.superview);
+                return;
+            }
+        }
+        
+        // C. Bottom Vacuum (Gray Bar Fix)
         CGFloat y = self.frame.origin.y;
         CGFloat h = self.frame.size.height;
         CGFloat screenH = [UIScreen mainScreen].bounds.size.height;
@@ -118,61 +82,76 @@ void nukeView(UIView *v) {
             if ([self isKindOfClass:[UITabBar class]] || 
                 [cls containsString:@"TabBar"] || 
                 [cls containsString:@"Input"] ||
-                [cls containsString:@"Keyboard"] ||
-                [cls containsString:@"Composer"]) return;
+                [cls containsString:@"Keyboard"]) return;
 
-            if ([cls containsString:@"Banner"] || [cls containsString:@"Ad"] || [cls containsString:@"Pub"] || [cls containsString:@"Sticky"]) {
-                nukeView(self);
+            // Target Banners
+            if ([cls containsString:@"Banner"] || [cls containsString:@"Ad"] || [cls containsString:@"Pub"]) {
+                nuke(self);
                 return;
             }
-            if ([self isKindOfClass:[UIVisualEffectView class]]) {
-                 if (h < 100) nukeView(self);
+            // Target Visual Effects (Gray Blur)
+            if ([self isKindOfClass:[UIVisualEffectView class]] && h < 100) {
+                 nuke(self);
             }
+            // Target Generic Placeholders
             if ((h >= 49 && h <= 51) || (h >= 89 && h <= 95)) {
-                if (self.backgroundColor != [UIColor clearColor]) self.backgroundColor = [UIColor clearColor];
-                if (self.subviews.count == 0) nukeView(self);
+                if (self.subviews.count == 0) nuke(self);
+                else self.backgroundColor = [UIColor clearColor];
             }
         }
     }
 }
 %end
 
-// 4. Button Cleaner (Added "Report")
-%hook UIButton
-- (void)setTitle:(NSString *)t forState:(UIControlState)s {
+// 2. Alert Blocker (Expanded)
+%hook UIAlertController
+- (void)viewDidLoad {
     %orig;
-    if (ads() && t.length > 0) {
-        if ([t localizedCaseInsensitiveContainsString:@"Hide Ads"] || 
-            [t localizedCaseInsensitiveContainsString:@"Remove Ads"] ||
-            [t localizedCaseInsensitiveContainsString:@"Report"]) {
+    if (ads()) {
+        NSString *t = self.title ?: @"";
+        NSString *m = self.message ?: @"";
+        // Catch "Something went wrong", "Error", "Oops"
+        if ([t localizedCaseInsensitiveContainsString:@"wrong"] || 
+            [m localizedCaseInsensitiveContainsString:@"wrong"] ||
+            [t localizedCaseInsensitiveContainsString:@"error"] ||
+            [t localizedCaseInsensitiveContainsString:@"oops"]) {
             
-            self.hidden = YES;
-            UIView *p = self.superview;
-            for (int i=0; i<8; i++) {
-                if (!p) break;
-                if (p.frame.size.height > 20 && p.frame.size.height < 180) nukeView(p);
-                p = p.superview;
-            }
+            // Force invisible immediately
+            self.view.hidden = YES;
+            self.view.alpha = 0;
+            
+            // Kill actions
+            [self.actions enumerateObjectsUsingBlock:^(UIAlertAction *action, NSUInteger idx, BOOL *stop) {
+                [action setEnabled:NO];
+            }];
         }
     }
 }
+- (void)viewWillAppear:(BOOL)animated {
+    %orig;
+    // Double tap to ensure it never shows
+    if (self.view.hidden) [self dismissViewControllerAnimated:NO completion:nil];
+}
 %end
 
-// 5. Explicit Feed Ad View
+// 3. Feed Ad View (Explicit Kill)
 @interface IFNativeAdInfoView : UIView @end
 %hook IFNativeAdInfoView
-- (void)didMoveToWindow { %orig; if (ads()) nukeView(self); }
-- (void)layoutSubviews { %orig; if (ads()) nukeView(self); }
+- (void)didMoveToWindow { %orig; if (ads()) nuke(self); }
+- (void)layoutSubviews { %orig; if (ads()) nuke(self); }
 %end
 %end // End UICleaner
 
-// --- UPSALE ASSASSIN (Invisibility Cloak Edition) ---
+
+// --- POPUP BLOCKER (Pre-Emptive Strike) ---
 %group UpsellBlockers
 %hook UIViewController
 
+// Block at the Source (The Root Presenter)
 - (void)presentViewController:(UIViewController *)vc animated:(BOOL)flag completion:(void (^)(void))completion {
     if (en(kIFBlockUpsells)) {
         NSString *name = NSStringFromClass([vc class]);
+        // Block Upsells AND Alerts that slipped through
         if ([name localizedCaseInsensitiveContainsString:@"Premium"] || 
             [name localizedCaseInsensitiveContainsString:@"Subscription"] || 
             [name localizedCaseInsensitiveContainsString:@"Upsell"] ||
@@ -180,45 +159,53 @@ void nukeView(UIView *v) {
             [name localizedCaseInsensitiveContainsString:@"Sale"]) {
             
             if (completion) completion(); 
-            return;
+            return; // STOP. Do not pass go.
         }
     }
     %orig;
-}
-
-// STAGE 1: Make Invisible Instantly (Hides "Clear GUI" and "Close Button")
-- (void)viewWillAppear:(BOOL)animated {
-    %orig;
-    if (en(kIFBlockUpsells)) {
-        NSString *name = NSStringFromClass([self class]);
-        if ([name localizedCaseInsensitiveContainsString:@"Premium"] || 
-            [name localizedCaseInsensitiveContainsString:@"Subscription"] || 
-            [name localizedCaseInsensitiveContainsString:@"Upsell"]) {
-            
-            self.view.alpha = 0; // Invisible
-            self.view.hidden = YES;
-            self.view.userInteractionEnabled = NO;
-        }
-    }
-}
-
-// STAGE 2: Safe Dismissal (Prevents Freeze)
-- (void)viewDidAppear:(BOOL)animated {
-    %orig;
-    if (en(kIFBlockUpsells)) {
-        NSString *name = NSStringFromClass([self class]);
-        if ([name localizedCaseInsensitiveContainsString:@"Premium"] || 
-            [name localizedCaseInsensitiveContainsString:@"Subscription"] || 
-            [name localizedCaseInsensitiveContainsString:@"Upsell"]) {
-            
-            // Wait 0.2s for lifecycle to settle, then kill
-            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.2 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-                [self dismissViewControllerAnimated:NO completion:nil];
-            });
-        }
-    }
 }
 %end
+%end
+
+
+// --- AD BLOCKER (Deep Hook) ---
+%group AdBlockers
+
+// 1. AppLovin
+%hook ALAdService
+- (void)loadNextAd:(id)a andNotify:(id)b { if(ads()) return; %orig; }
+%end
+
+// 2. IronSource (The Feed Ads) - FIX: Don't return nil, just block load
+%hook ISNativeAd
+- (void)loadAd { 
+    if(ads()) return; // Just do nothing. Returning nil in init caused fallbacks.
+    %orig; 
+}
+- (void)loadAdWithViewController:(id)vc {
+    if(ads()) return;
+    %orig;
+}
+%end
+
+// 3. Pangle (Feed Ads Backup)
+%hook PAGBannerAd
+- (void)loadAd:(id)a { if(ads()) return; %orig; }
+%end
+%hook PAGNativeAd
+- (void)loadAd:(id)a { if(ads()) return; %orig; } // Block Native too
+%end
+
+// 4. Amazon
+%hook DTBAdLoader
+- (void)loadAd:(id)a { if(ads()) return; %orig; }
+%end
+
+// 5. InMobi
+%hook IMBanner
+- (void)load { if(ads()) return; %orig; }
+%end
+
 %end
 
 // --- VIDEO SNIFFER ---
@@ -338,24 +325,6 @@ void openSettingsMenu() {
         }
     }
 }
-%end
-
-%group AdBlockers
-%hook ALAdService
-- (void)loadNextAd:(id)a andNotify:(id)b { if(ads()) return; %orig; }
-%end
-%hook IMBanner
-- (void)load { if(ads()) return; %orig; }
-%end
-%hook PAGBannerAd
-- (void)loadAd:(id)a { if(ads()) return; %orig; }
-%end
-%hook DTBAdLoader
-- (void)loadAd:(id)a { if(ads()) return; %orig; }
-%end
-%hook ISNativeAd
-- (instancetype)initWithInteractionDelegate:(id)d { if(ads()) return nil; return %orig; }
-%end
 %end
 
 %ctor {

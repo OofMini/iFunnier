@@ -8,7 +8,7 @@
 #define kIFNoWatermark @"kIFNoWatermark"
 #define kIFSaveVids @"kIFSaveVids"
 
-// --- GLOBAL STORAGE FOR LAST PLAYED VIDEO ---
+// --- GLOBAL STORAGE ---
 static NSURL *gLastPlayedURL = nil;
 
 // --- HELPERS ---
@@ -24,18 +24,114 @@ void showToast(NSString *msg) {
     });
 }
 
-// --- VIDEO SNIFFER (The "Magic" Fix) ---
-// Hooks the system player so we ALWAYS know what video is playing
-%hook AVPlayer
+// --- PREFS HELPERS ---
+BOOL en(NSString *k) { return [[NSUserDefaults standardUserDefaults] boolForKey:k]; }
+BOOL ads() { return en(kIFBlockAds); }
+BOOL upsells() { return en(kIFBlockUpsells); }
 
+// --- UI CLEANER (The Fix for Blank Spaces & Text) ---
+%group UICleaner
+
+// Helper to collapse a view completely
+void killView(UIView *v) {
+    if (!v) return;
+    v.hidden = YES;
+    v.alpha = 0;
+    CGRect f = v.frame;
+    f.size.height = 0;
+    f.size.width = 0;
+    v.frame = f;
+}
+
+// Hook Labels to catch "Holiday Sale" and "Hide Ads" text
+%hook UILabel
+- (void)setText:(NSString *)text {
+    %orig;
+    if (ads() && text.length > 0) {
+        // Fix 1: Holiday Sale (Top Right & Sidebar)
+        if ([text containsString:@"Holiday Sale"] || [text containsString:@"Sale"]) {
+            // Check if it's a short promo label (avoid hiding actual memes)
+            if (text.length < 20) {
+                self.hidden = YES;
+                killView(self.superview); // Kill the badge container
+            }
+            return;
+        }
+        
+        // Fix 2: "Hide Ads" (Bottom Right)
+        // If we see this, we are INSIDE the ad banner. Kill the parent!
+        if ([text isEqualToString:@"Hide Ads"]) {
+            self.hidden = YES;
+            
+            // Walk up the hierarchy to find the main banner container
+            UIView *parent = self.superview;
+            for (int i = 0; i < 6; i++) {
+                if (!parent) break;
+                
+                // If view is at the bottom of screen and has banner-like height
+                if (parent.frame.size.height > 40 && parent.frame.size.height < 150) {
+                    killView(parent); // FOUND IT! Kill the blank space.
+                }
+                parent = parent.superview;
+            }
+        }
+    }
+}
+%end
+
+// Hook Buttons (Sometimes "Hide Ads" is a button)
+%hook UIButton
+- (void)setTitle:(NSString *)title forState:(UIControlState)state {
+    %orig;
+    if (ads() && title.length > 0) {
+        if ([title isEqualToString:@"Hide Ads"]) {
+            self.hidden = YES;
+            UIView *parent = self.superview;
+            for (int i = 0; i < 6; i++) {
+                if (!parent) break;
+                if (parent.frame.size.height > 40 && parent.frame.size.height < 150) {
+                    killView(parent);
+                }
+                parent = parent.superview;
+            }
+        }
+    }
+}
+%end
+
+// Backup: Check for any view stuck at the bottom of the screen (Blank Placeholder)
+%hook UIView
+- (void)layoutSubviews {
+    %orig;
+    if (ads()) {
+        // Heuristic: Is this a banner at the bottom?
+        CGFloat screenH = [UIScreen mainScreen].bounds.size.height;
+        if (self.frame.origin.y >= (screenH - 100) && self.frame.size.height > 40 && self.frame.size.height < 120) {
+            
+            // Don't kill the Tab Bar! (Tab bar is usually exactly 49 or 83 high)
+            if ([self isKindOfClass:[UITabBar class]]) return;
+            if ([NSStringFromClass([self class]) containsString:@"TabBar"]) return;
+
+            // Check if it's an ad container (often has 'Banner', 'Ad', or 'Mopub' in name)
+            NSString *name = NSStringFromClass([self class]);
+            if ([name containsString:@"Banner"] || [name containsString:@"Ad"] || [name containsString:@"Pub"]) {
+                killView(self);
+            }
+        }
+    }
+}
+%end
+
+%end // End UICleaner
+
+// --- VIDEO SNIFFER ---
+%hook AVPlayer
 - (void)replaceCurrentItemWithPlayerItem:(AVPlayerItem *)item {
     %orig;
     if (item && [item.asset isKindOfClass:[AVURLAsset class]]) {
         gLastPlayedURL = [(AVURLAsset *)item.asset URL];
-        // NSLog(@"[iFunnier] Sniffed Video URL: %@", gLastPlayedURL); // Debug
     }
 }
-
 - (instancetype)initWithPlayerItem:(AVPlayerItem *)item {
     self = %orig;
     if (item && [item.asset isKindOfClass:[AVURLAsset class]]) {
@@ -43,44 +139,27 @@ void showToast(NSString *msg) {
     }
     return self;
 }
-
 %end
 
-// --- DOWNLOAD LOGIC ---
 void downloadLastVideo() {
-    if (!gLastPlayedURL) {
-        showToast(@"❌ No Video Detected Yet.\nPlay a video first!");
-        return;
-    }
-
+    if (!gLastPlayedURL) { showToast(@"❌ No Video Detected Yet.\nPlay a video first!"); return; }
     showToast(@"⏳ Downloading...");
-    
-    // Download in background
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
         NSData *data = [NSData dataWithContentsOfURL:gLastPlayedURL];
-        if (!data) {
-            showToast(@"❌ Download Failed (Network Error)");
-            return;
-        }
-
+        if (!data) { showToast(@"❌ Download Failed"); return; }
         dispatch_async(dispatch_get_main_queue(), ^{
             NSString *path = [NSTemporaryDirectory() stringByAppendingPathComponent:[NSString stringWithFormat:@"if_%@.mp4", [[NSUUID UUID] UUIDString]]];
             [data writeToFile:path atomically:YES];
-
             if (UIVideoAtPathIsCompatibleWithSavedPhotosAlbum(path)) {
                 UISaveVideoAtPathToSavedPhotosAlbum(path, nil, nil, nil);
-                showToast(@"✅ Video Saved to Photos");
-            } else {
-                showToast(@"❌ Error: Format not supported");
-            }
+                showToast(@"✅ Video Saved");
+            } else { showToast(@"❌ Error: Format not supported"); }
         });
     });
 }
 
-// --- SETTINGS VC ---
-@interface iFunnierSettingsViewController : UITableViewController
-@end
-
+// --- SETTINGS MENU ---
+@interface iFunnierSettingsViewController : UITableViewController @end
 @implementation iFunnierSettingsViewController
 - (void)viewDidLoad {
     [super viewDidLoad];
@@ -103,8 +182,8 @@ void downloadLastVideo() {
     BOOL on = NO;
     NSUserDefaults *d = [NSUserDefaults standardUserDefaults];
     
-    if (indexPath.row == 0) { txt = @"Block Ads"; on = [d boolForKey:kIFBlockAds]; }
-    else if (indexPath.row == 1) { txt = @"Block Upsells"; on = [d boolForKey:kIFBlockUpsells]; }
+    if (indexPath.row == 0) { txt = @"Block Ads / Upsells"; on = [d boolForKey:kIFBlockAds]; }
+    else if (indexPath.row == 1) { txt = @"Block Holiday Promos"; on = [d boolForKey:kIFBlockUpsells]; }
     else if (indexPath.row == 2) { txt = @"No Watermark"; on = [d boolForKey:kIFNoWatermark]; }
     else if (indexPath.row == 3) { txt = @"Auto-Save Video"; on = [d boolForKey:kIFSaveVids]; }
     
@@ -172,10 +251,6 @@ void openSettingsMenu() {
 %end
 
 // --- ADS & UPSELLS ---
-BOOL en(NSString *k) { return [[NSUserDefaults standardUserDefaults] boolForKey:k]; }
-BOOL ads() { return en(kIFBlockAds); }
-BOOL upsells() { return en(kIFBlockUpsells); }
-
 %group AdBlockers
 %hook ALAdService
 - (void)loadNextAd:(id)a andNotify:(id)b { if(ads()) return; %orig; }
@@ -192,10 +267,7 @@ BOOL upsells() { return en(kIFBlockUpsells); }
 %hook ISNativeAd
 - (instancetype)initWithInteractionDelegate:(id)d { if(ads()) return nil; return %orig; }
 %end
-
-// FIX: Define Interface for View
-@interface IFNativeAdInfoView : UIView
-@end
+@interface IFNativeAdInfoView : UIView @end
 %hook IFNativeAdInfoView
 - (void)didMoveToWindow {
     %orig;
@@ -229,6 +301,7 @@ BOOL upsells() { return en(kIFBlockUpsells); }
     %init;
     %init(AdBlockers);
     %init(UpsellBlockers);
+    %init(UICleaner); // Init new UI cleaner
     NSUserDefaults *d = [NSUserDefaults standardUserDefaults];
     if (![d objectForKey:kIFBlockAds]) [d setBool:YES forKey:kIFBlockAds];
     if (![d objectForKey:kIFBlockUpsells]) [d setBool:YES forKey:kIFBlockUpsells];

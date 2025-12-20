@@ -25,86 +25,106 @@ void showToast(NSString *msg) {
 
 BOOL en(NSString *k) { return [[NSUserDefaults standardUserDefaults] boolForKey:k]; }
 BOOL ads() { return en(kIFBlockAds); }
-BOOL upsells() { return en(kIFBlockUpsells); }
 
-// --- UI CLEANER ENGINE ---
+// --- UI CLEANER ENGINE (v3.0) ---
 %group UICleaner
 
-void crushView(UIView *v) {
+void nukeView(UIView *v) {
     if (!v) return;
     v.hidden = YES;
     v.alpha = 0;
     v.userInteractionEnabled = NO;
+    v.backgroundColor = [UIColor clearColor]; // FIX: Remove "Gray" background
+    
+    // Collapse size
     CGRect f = v.frame;
     f.size.height = 0;
     f.size.width = 0;
     v.frame = f;
 }
 
-// 1. Hook Standard Text
+// 1. Alert Blocker ("Something Went Wrong")
+%hook UIAlertController
+- (void)viewWillAppear:(BOOL)animated {
+    %orig;
+    if (ads()) {
+        NSString *title = self.title ?: @"";
+        NSString *msg = self.message ?: @"";
+        
+        // Block Generic Errors caused by AdBlock
+        if ([title localizedCaseInsensitiveContainsString:@"wrong"] || 
+            [msg localizedCaseInsensitiveContainsString:@"wrong"] ||
+            [title localizedCaseInsensitiveContainsString:@"error"]) {
+            
+            // Auto-Dismiss without showing
+            self.view.hidden = YES;
+            [self dismissViewControllerAnimated:NO completion:nil];
+        }
+    }
+}
+%end
+
+// 2. Text Cleaner (Holiday / Hide Ads)
 %hook UILabel
 - (void)setText:(NSString *)text {
     %orig;
     if (ads() && text.length > 0) {
         NSString *clean = [text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
         
-        // Holiday Sale / Premium Badges
-        if ([text containsString:@"Holiday"] || [text containsString:@"Sale"] || [text containsString:@"Premium"]) {
-            if (text.length < 30) { 
+        // Holiday / Sale / Premium (Case Insensitive)
+        if ([clean localizedCaseInsensitiveContainsString:@"Holiday"] || 
+            [clean localizedCaseInsensitiveContainsString:@"Sale"] || 
+            [clean localizedCaseInsensitiveContainsString:@"Premium"] ||
+            [clean localizedCaseInsensitiveContainsString:@"Offer"]) {
+            
+            if (clean.length < 35) { 
                 self.hidden = YES;
-                crushView(self.superview); 
+                nukeView(self.superview); // Kill container
             }
         }
-        // "Hide Ads" Button/Label (Case Insensitive Check)
-        if ([clean caseInsensitiveCompare:@"Hide Ads"] == NSOrderedSame || 
-            [clean caseInsensitiveCompare:@"Remove Ads"] == NSOrderedSame) {
+        
+        // Hide Ads Button
+        if ([clean localizedCaseInsensitiveContainsString:@"Hide Ads"] || 
+            [clean localizedCaseInsensitiveContainsString:@"Remove Ads"]) {
             self.hidden = YES;
             UIView *p = self.superview;
             for (int i=0; i<8; i++) {
                 if (!p) break;
-                // Kill if it looks like a banner
-                if (p.frame.size.height > 30 && p.frame.size.height < 160) crushView(p);
+                // Kill if banner-sized
+                if (p.frame.size.height > 30 && p.frame.size.height < 160) nukeView(p);
                 p = p.superview;
             }
         }
     }
 }
 
-// 2. Hook ATTRIBUTED Text (Crucial for stylized text)
+// 3. Attributed Text (Stylized Holiday Badges)
 - (void)setAttributedText:(NSAttributedString *)text {
     %orig;
     if (ads() && text.string.length > 0) {
         NSString *str = text.string;
-        if ([str containsString:@"Holiday"] || [str containsString:@"Sale"] || [str containsString:@"Premium"]) {
-            if (str.length < 30) {
+        if ([str localizedCaseInsensitiveContainsString:@"Holiday"] || 
+            [str localizedCaseInsensitiveContainsString:@"Sale"]) {
+            if (str.length < 35) {
                 self.hidden = YES;
-                crushView(self.superview);
-            }
-        }
-        if ([str containsString:@"Hide Ads"] || [str containsString:@"Remove Ads"]) {
-            self.hidden = YES;
-            UIView *p = self.superview;
-            for (int i=0; i<8; i++) {
-                if (!p) break;
-                if (p.frame.size.height > 30 && p.frame.size.height < 160) crushView(p);
-                p = p.superview;
+                nukeView(self.superview);
             }
         }
     }
 }
 %end
 
-// 3. Hook Buttons
+// 4. Button Cleaner
 %hook UIButton
 - (void)setTitle:(NSString *)t forState:(UIControlState)s {
     %orig;
     if (ads() && t.length > 0) {
-        if ([t containsString:@"Hide Ads"] || [t containsString:@"Remove Ads"]) {
+        if ([t localizedCaseInsensitiveContainsString:@"Hide Ads"] || [t localizedCaseInsensitiveContainsString:@"Remove Ads"]) {
             self.hidden = YES;
             UIView *p = self.superview;
             for (int i=0; i<8; i++) {
                 if (!p) break;
-                if (p.frame.size.height > 30 && p.frame.size.height < 160) crushView(p);
+                if (p.frame.size.height > 30 && p.frame.size.height < 160) nukeView(p);
                 p = p.superview;
             }
         }
@@ -112,15 +132,14 @@ void crushView(UIView *v) {
 }
 %end
 
-// 4. Feed Ad Blank Spaces (Explicit Hook)
+// 5. Explicit Feed Ad View
 @interface IFNativeAdInfoView : UIView @end
 %hook IFNativeAdInfoView
-- (void)didMoveToWindow { %orig; if (ads()) crushView(self); }
-- (void)layoutSubviews { %orig; if (ads()) crushView(self); }
-- (void)setHidden:(BOOL)h { if (ads()) %orig(YES); else %orig(h); }
+- (void)didMoveToWindow { %orig; if (ads()) nukeView(self); }
+- (void)layoutSubviews { %orig; if (ads()) nukeView(self); }
 %end
 
-// 5. General Bottom Banner Cleaner
+// 6. BOTTOM VACUUM (Fixes "Not OLED Black" Issue)
 %hook UIView
 - (void)layoutSubviews {
     %orig;
@@ -129,13 +148,35 @@ void crushView(UIView *v) {
         CGFloat h = self.frame.size.height;
         CGFloat screenH = [UIScreen mainScreen].bounds.size.height;
         
-        // Detect Bottom Sticky Banner
-        if (y >= (screenH - 160) && h >= 40 && h <= 120) {
-            NSString *cls = NSStringFromClass([self class]);
-            if ([self isKindOfClass:[UITabBar class]] || [cls containsString:@"TabBar"] || [cls containsString:@"Input"]) return;
+        // Target views at the VERY bottom
+        if (y >= (screenH - 120)) {
             
+            // SAFETY: Do NOT touch the Tab Bar or Input Fields (Comments)
+            NSString *cls = NSStringFromClass([self class]);
+            if ([self isKindOfClass:[UITabBar class]] || 
+                [cls containsString:@"TabBar"] || 
+                [cls containsString:@"Input"] ||
+                [cls containsString:@"Keyboard"] ||
+                [cls containsString:@"Composer"]) return;
+
+            // Target 1: Explicit Banner Classes
             if ([cls containsString:@"Banner"] || [cls containsString:@"Ad"] || [cls containsString:@"Pub"] || [cls containsString:@"Sticky"]) {
-                crushView(self);
+                nukeView(self);
+                return;
+            }
+            
+            // Target 2: The "Gray Bar" (VisualEffectView)
+            if ([self isKindOfClass:[UIVisualEffectView class]]) {
+                 // If it's small and at the bottom, it's likely the ad backdrop
+                 if (h < 100) nukeView(self);
+            }
+            
+            // Target 3: Generic Views with specific height (The Placeholder)
+            // Ads are usually 50 or 90 height
+            if ((h >= 49 && h <= 51) || (h >= 89 && h <= 91)) {
+                // Double check it's not the TabBar (TabBar is usually 49 or 83)
+                // We assume if it's NOT a UITabBar class (checked above), it's the ad container
+                nukeView(self);
             }
         }
     }
@@ -143,51 +184,37 @@ void crushView(UIView *v) {
 %end
 %end // End UICleaner
 
-
-// --- UPSELL ASSASSIN (Startup Popup Killer) ---
+// --- UPSALE BLOCKER (Fixed) ---
 %group UpsellBlockers
-
 %hook UIViewController
-
-// Method 1: Prevent Presentation
 - (void)presentViewController:(UIViewController *)vc animated:(BOOL)flag completion:(void (^)(void))completion {
-    if (upsells()) {
+    if (en(kIFBlockUpsells)) {
         NSString *name = NSStringFromClass([vc class]);
-        if ([name containsString:@"Premium"] || 
-            [name containsString:@"Subscription"] || 
-            [name containsString:@"Upsell"] || 
-            [name containsString:@"Offer"] || 
-            [name containsString:@"Sale"] ||
-            [name containsString:@"Purchase"]) {
-            
-            // showToast([NSString stringWithFormat:@"Blocked: %@", name]); // Debug
+        if ([name localizedCaseInsensitiveContainsString:@"Premium"] || 
+            [name localizedCaseInsensitiveContainsString:@"Subscription"] || 
+            [name localizedCaseInsensitiveContainsString:@"Upsell"] ||
+            [name localizedCaseInsensitiveContainsString:@"Offer"] ||
+            [name localizedCaseInsensitiveContainsString:@"Sale"]) {
             if (completion) completion();
             return;
         }
     }
     %orig;
 }
-
-// Method 2: Kill on Sight (For Startup Popups)
 - (void)viewWillAppear:(BOOL)animated {
     %orig;
-    if (upsells()) {
+    if (en(kIFBlockUpsells)) {
         NSString *name = NSStringFromClass([self class]);
-        if ([name containsString:@"Premium"] || 
-            [name containsString:@"Subscription"] || 
-            [name containsString:@"Upsell"] || 
-            [name containsString:@"Offer"] ||
-            [name containsString:@"Sale"]) {
-            
-            self.view.hidden = YES; // Hide visually immediately
-            [self dismissViewControllerAnimated:NO completion:nil]; // Close it
+        if ([name localizedCaseInsensitiveContainsString:@"Premium"] || 
+            [name localizedCaseInsensitiveContainsString:@"Subscription"] || 
+            [name localizedCaseInsensitiveContainsString:@"Upsell"]) {
+            self.view.hidden = YES;
+            [self dismissViewControllerAnimated:NO completion:nil];
         }
     }
 }
-
 %end
 %end
-
 
 // --- VIDEO SNIFFER ---
 %hook AVPlayer
@@ -207,7 +234,7 @@ void crushView(UIView *v) {
 %end
 
 void downloadLastVideo() {
-    if (!gLastPlayedURL) { showToast(@"❌ No Video Detected Yet.\nPlay a video first!"); return; }
+    if (!gLastPlayedURL) { showToast(@"❌ No Video Detected.\nPlay a video first!"); return; }
     showToast(@"⏳ Downloading...");
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
         NSData *data = [NSData dataWithContentsOfURL:gLastPlayedURL];
@@ -223,7 +250,7 @@ void downloadLastVideo() {
     });
 }
 
-// --- SETTINGS MENU ---
+// --- SETTINGS ---
 @interface iFunnierSettingsViewController : UITableViewController @end
 @implementation iFunnierSettingsViewController
 - (void)viewDidLoad {
@@ -242,15 +269,12 @@ void downloadLastVideo() {
     UISwitch *sw = [UISwitch new];
     [sw addTarget:self action:@selector(t:) forControlEvents:UIControlEventValueChanged];
     sw.tag = indexPath.row;
-    
     NSString *txt = @"";
     BOOL on = NO;
     NSUserDefaults *d = [NSUserDefaults standardUserDefaults];
-    
     if (indexPath.row == 0) { txt = @"Block Ads / Upsells"; on = [d boolForKey:kIFBlockAds]; }
     else if (indexPath.row == 1) { txt = @"No Watermark"; on = [d boolForKey:kIFNoWatermark]; }
     else if (indexPath.row == 2) { txt = @"Auto-Save Video"; on = [d boolForKey:kIFSaveVids]; }
-    
     cell.textLabel.text = txt;
     [sw setOn:on animated:NO];
     cell.accessoryView = sw;
@@ -262,7 +286,6 @@ void downloadLastVideo() {
     [[NSUserDefaults standardUserDefaults] synchronize];
 }
 @end
-
 void openSettingsMenu() {
     UIViewController *root = [UIApplication sharedApplication].keyWindow.rootViewController;
     while (root.presentedViewController) root = root.presentedViewController;

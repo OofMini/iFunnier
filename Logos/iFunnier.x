@@ -69,7 +69,6 @@ void downloadVideo() {
                          if (img) UIImageWriteToSavedPhotosAlbum(img, nil, nil, nil);
                     }
                     
-                    // Show Confirmation Toast
                     UIAlertController *a = [UIAlertController alertControllerWithTitle:@"Saved!" message:nil preferredStyle:UIAlertControllerStyleAlert];
                     [[UIApplication sharedApplication].keyWindow.rootViewController presentViewController:a animated:YES completion:nil];
                     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
@@ -81,7 +80,7 @@ void downloadVideo() {
     } @catch (NSException *e) {}
 }
 
-// --- NATIVE SHARE SHEET BUTTON (System Fallback) ---
+// --- NATIVE SHARE SHEET BUTTON ---
 @interface IFDownloadActivity : UIActivity
 @end
 
@@ -102,21 +101,22 @@ void downloadVideo() {
 }
 %end
 
-// --- CUSTOM SHARE SHEET HOOK (Targeting IFActivitiesViewController) ---
-// This hooks the likely Custom Share Sheet controller found in your IPA
-%hook IFActivitiesViewController
+// --- FIX: Explicitly define the class so compiler knows it has a 'view' ---
+@interface IFActivitiesViewController : UIViewController
+@end
 
+%hook IFActivitiesViewController
 - (void)viewDidLoad {
     %orig;
     
-    // Inject a "Download" button into the view hierarchy
+    // Inject a "Download" button
     UIButton *dlBtn = [UIButton buttonWithType:UIButtonTypeSystem];
     [dlBtn setTitle:@"Save No Watermark" forState:UIControlStateNormal];
     [dlBtn setImage:[UIImage systemImageNamed:@"arrow.down.circle"] forState:UIControlStateNormal];
     [dlBtn setBackgroundColor:[UIColor systemBlueColor]];
     [dlBtn setTintColor:[UIColor whiteColor]];
     dlBtn.layer.cornerRadius = 10;
-    dlBtn.frame = CGRectMake(20, 20, self.view.frame.size.width - 40, 50); // Floating at top
+    dlBtn.frame = CGRectMake(20, 20, self.view.frame.size.width - 40, 50); // Now self.view is valid
     
     [dlBtn addTarget:self action:@selector(manualDownload) forControlEvents:UIControlEventTouchUpInside];
     
@@ -128,10 +128,14 @@ void downloadVideo() {
 - (void)manualDownload {
     downloadVideo();
 }
-
 %end
 
-// --- SETTINGS BUTTON (Native Nav Bar) ---
+// --- SETTINGS BUTTON ---
+// Interface to declare the new method exists
+@interface UINavigationItem (iFunnier)
+- (void)openIFSettings;
+@end
+
 %hook UINavigationItem
 - (void)setTitle:(NSString *)title {
     %orig;
@@ -162,7 +166,11 @@ void downloadVideo() {
     if (event.type == UIEventTypeTouches) {
         NSSet *t = [event allTouches];
         if ([[t anyObject] phase] == UITouchPhaseBegan && t.count == 3) {
-             [self.rootViewController.navigationItem openIFSettings]; 
+             // FIX: Cast the navigationItem to id so compiler doesn't check selector
+             id navItem = self.rootViewController.navigationItem;
+             if ([navItem respondsToSelector:@selector(openIFSettings)]) {
+                 [navItem performSelector:@selector(openIFSettings)];
+             }
         }
     }
 }

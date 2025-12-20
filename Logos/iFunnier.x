@@ -17,8 +17,6 @@
     self.title = @"iFunnier Settings";
     self.view.backgroundColor = [UIColor systemBackgroundColor];
     [self.tableView registerClass:[UITableViewCell class] forCellReuseIdentifier:@"Cell"];
-    
-    // Close Button
     self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemDone target:self action:@selector(closeSettings)];
 }
 
@@ -26,36 +24,63 @@
     [self dismissViewControllerAnimated:YES completion:nil];
 }
 
-- (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView { return 1; }
-- (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section { return 3; }
+- (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView { return 2; }
+
+- (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
+    if (section == 0) return 3; // Toggles
+    return 1; // Actions
+}
+
+- (NSString *)tableView:(UITableView *)tableView titleForHeaderInSection:(NSInteger)section {
+    if (section == 0) return @"Features";
+    return @"Actions";
+}
 
 - (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
     UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:@"Cell" forIndexPath:indexPath];
     cell.selectionStyle = UITableViewCellSelectionStyleNone;
     
-    UISwitch *toggle = [[UISwitch alloc] initWithFrame:CGRectZero];
-    [toggle addTarget:self action:@selector(toggleChanged:) forControlEvents:UIControlEventValueChanged];
-    toggle.tag = indexPath.row;
-    
-    NSString *text = @"";
-    BOOL isOn = NO;
-    NSUserDefaults *prefs = [NSUserDefaults standardUserDefaults];
-    
-    if (indexPath.row == 0) {
-        text = @"Block Ads (Nuclear)";
-        isOn = [prefs boolForKey:kIFBlockAds];
-    } else if (indexPath.row == 1) {
-        text = @"Remove Watermarks";
-        isOn = [prefs boolForKey:kIFNoWatermark];
-    } else if (indexPath.row == 2) {
-        text = @"Save Videos";
-        isOn = [prefs boolForKey:kIFSaveVids];
+    if (indexPath.section == 0) {
+        // Toggles
+        UISwitch *toggle = [[UISwitch alloc] initWithFrame:CGRectZero];
+        [toggle addTarget:self action:@selector(toggleChanged:) forControlEvents:UIControlEventValueChanged];
+        toggle.tag = indexPath.row;
+        
+        NSString *text = @"";
+        BOOL isOn = NO;
+        NSUserDefaults *prefs = [NSUserDefaults standardUserDefaults];
+        
+        if (indexPath.row == 0) {
+            text = @"Block Ads (Nuclear)";
+            isOn = [prefs boolForKey:kIFBlockAds];
+        } else if (indexPath.row == 1) {
+            text = @"Remove Watermarks";
+            isOn = [prefs boolForKey:kIFNoWatermark];
+        } else if (indexPath.row == 2) {
+            text = @"Save Videos";
+            isOn = [prefs boolForKey:kIFSaveVids];
+        }
+        
+        cell.textLabel.text = text;
+        [toggle setOn:isOn animated:NO];
+        cell.accessoryView = toggle;
+    } else {
+        // Action Button
+        cell.textLabel.text = @"Force Save Current Media";
+        cell.textLabel.textColor = [UIColor systemBlueColor];
+        cell.textLabel.textAlignment = NSTextAlignmentCenter;
+        cell.accessoryView = nil;
     }
     
-    cell.textLabel.text = text;
-    [toggle setOn:isOn animated:NO];
-    cell.accessoryView = toggle;
     return cell;
+}
+
+- (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
+    if (indexPath.section == 1) {
+        // Trigger Force Save
+        [tableView deselectRowAtIndexPath:indexPath animated:YES];
+        [self forceSave];
+    }
 }
 
 - (void)toggleChanged:(UISwitch *)sender {
@@ -68,6 +93,44 @@
     [prefs setBool:sender.isOn forKey:key];
     [prefs synchronize];
 }
+
+// --- FORCE SAVE LOGIC ---
+- (void)forceSave {
+    @try {
+        // Dismiss menu first so we can see the result
+        [self dismissViewControllerAnimated:YES completion:^{
+            // Access the iFunny Controller logic to find the active video
+            Class controllerClass = NSClassFromString(@"FNApplicationController");
+            if (controllerClass && [controllerClass respondsToSelector:@selector(instance)]) {
+                id instance = [controllerClass instance];
+                id adVC = [instance performSelector:@selector(adViewController)];
+                id topVC = [adVC performSelector:@selector(topViewController)];
+                id activeCell = [topVC performSelector:@selector(activeCell)];
+                
+                if (activeCell && [activeCell respondsToSelector:@selector(contentData)]) {
+                    NSData *contentData = [activeCell contentData];
+                    if (contentData) {
+                        NSString *tmpPath = [NSTemporaryDirectory() stringByAppendingPathComponent:@"ifunniertmp.mp4"];
+                        [contentData writeToFile:tmpPath atomically:YES];
+                        
+                        if (UIVideoAtPathIsCompatibleWithSavedPhotosAlbum(tmpPath)) {
+                            UISaveVideoAtPathToSavedPhotosAlbum(tmpPath, nil, nil, nil);
+                            
+                            UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Success" message:@"Video saved to Camera Roll!" preferredStyle:UIAlertControllerStyleAlert];
+                            [alert addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
+                            [[UIApplication sharedApplication].keyWindow.rootViewController presentViewController:alert animated:YES completion:nil];
+                        }
+                    } else {
+                        // If no data, maybe it's an image?
+                         UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Error" message:@"No video data found. Is this an image?" preferredStyle:UIAlertControllerStyleAlert];
+                         [[UIApplication sharedApplication].keyWindow.rootViewController presentViewController:alert animated:YES completion:nil];
+                    }
+                }
+            }
+        }];
+    } @catch (NSException *e) { }
+}
+
 @end
 
 // --- HELPER ---
@@ -108,6 +171,30 @@ BOOL shouldBlock() { return isFeatureEnabled(kIFBlockAds); }
     BOOL noWatermark = isFeatureEnabled(kIFNoWatermark);
     BOOL saveVideo = isFeatureEnabled(kIFSaveVids);
     
+    // Logic: If "Save Video" is ON, always try video logic first
+    if (saveVideo) {
+         @try {
+            Class controllerClass = NSClassFromString(@"FNApplicationController");
+            if (controllerClass && [controllerClass respondsToSelector:@selector(instance)]) {
+                id instance = [controllerClass instance];
+                id adVC = [instance performSelector:@selector(adViewController)];
+                id topVC = [adVC performSelector:@selector(topViewController)];
+                id activeCell = [topVC performSelector:@selector(activeCell)];
+                if (activeCell && [activeCell respondsToSelector:@selector(contentData)]) {
+                    NSData *contentData = [activeCell contentData];
+                    if (contentData) {
+                        NSString *tmpPath = [NSTemporaryDirectory() stringByAppendingPathComponent:@"ifunniertmp.mp4"];
+                        [contentData writeToFile:tmpPath atomically:YES];
+                        UISaveVideoAtPathToSavedPhotosAlbum(tmpPath, nil, nil, nil);
+                        [self saveToGaleryEndedWithError:nil];
+                        return; // Done, skip normal save
+                    }
+                }
+            }
+        } @catch (NSException *e) { }
+    }
+
+    // Normal Image Logic
     NSURL *gifURL = nil;
     UIImage *image = nil;
     @try {
@@ -124,25 +211,6 @@ BOOL shouldBlock() { return isFeatureEnabled(kIFBlockAds); }
         UIImage *croppedImage = [UIImage imageWithCGImage:imageRef];
         CGImageRelease(imageRef);
         UIImageWriteToSavedPhotosAlbum(croppedImage, nil, nil, nil);
-    } else if (!gifURL && !image && saveVideo) {
-        // Video Saving
-         @try {
-            Class controllerClass = %c(FNApplicationController);
-            if (controllerClass && [controllerClass respondsToSelector:@selector(instance)]) {
-                id instance = [controllerClass instance];
-                id adVC = [instance performSelector:@selector(adViewController)];
-                id topVC = [adVC performSelector:@selector(topViewController)];
-                id activeCell = [topVC performSelector:@selector(activeCell)];
-                if (activeCell && [activeCell respondsToSelector:@selector(contentData)]) {
-                    NSData *contentData = [activeCell contentData];
-                    if (contentData) {
-                        NSString *tmpPath = [NSTemporaryDirectory() stringByAppendingPathComponent:@"ifunniertmp.mp4"];
-                        [contentData writeToFile:tmpPath atomically:YES];
-                        UISaveVideoAtPathToSavedPhotosAlbum(tmpPath, nil, nil, nil);
-                    } else { %orig; }
-                } else { %orig; }
-            } else { %orig; }
-        } @catch (NSException *e) { %orig; }
     } else {
         %orig;
     }

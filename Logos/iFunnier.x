@@ -26,7 +26,7 @@ void showToast(NSString *msg) {
 BOOL en(NSString *k) { return [[NSUserDefaults standardUserDefaults] boolForKey:k]; }
 BOOL ads() { return en(kIFBlockAds); }
 
-// --- UI CLEANER (Crash-Proof Edition) ---
+// --- FEED CLEANER (The Fix for Swiping Ads) ---
 %group UICleaner
 
 void nuke(UIView *v) {
@@ -35,54 +35,78 @@ void nuke(UIView *v) {
     v.alpha = 0;
     v.userInteractionEnabled = NO;
     v.backgroundColor = [UIColor clearColor];
+    // Collapse frame to remove "Black Box"
     CGRect f = v.frame;
     f.size.height = 0;
     f.size.width = 0;
     v.frame = f;
 }
 
-// 1. Universal View Scanner
+// 1. CELL HUNTER: Kills the "Page" before you see it
+%hook UICollectionViewCell
+- (void)layoutSubviews {
+    %orig;
+    if (ads()) {
+        // Scan children for "Advertisement" label
+        BOOL isAd = NO;
+        
+        // Deep scan of subviews (Recursive is too slow, we do iterative scan of top levels)
+        for (UIView *sub in self.contentView.subviews) {
+            // Check Labels
+            if ([sub isKindOfClass:[UILabel class]]) {
+                NSString *t = ((UILabel *)sub).text;
+                if ([t localizedCaseInsensitiveContainsString:@"Advertisement"] || 
+                    [t localizedCaseInsensitiveContainsString:@"Sponsored"]) {
+                    isAd = YES; break;
+                }
+            }
+            // Check Accessibility (SwiftUI)
+            if (sub.accessibilityLabel && [sub.accessibilityLabel localizedCaseInsensitiveContainsString:@"Advertisement"]) {
+                isAd = YES; break;
+            }
+            // Check Buttons (Hide Ads button)
+            if ([sub isKindOfClass:[UIButton class]]) {
+                NSString *t = ((UIButton *)sub).currentTitle;
+                if ([t localizedCaseInsensitiveContainsString:@"Hide Ads"] || [t localizedCaseInsensitiveContainsString:@"Report"]) {
+                    isAd = YES; break;
+                }
+            }
+        }
+        
+        if (isAd) {
+            nuke(self);
+            nuke(self.contentView);
+        }
+    }
+}
+%end
+
+// 2. VIEW SCANNER: Clean up any leftovers
 %hook UIView
 - (void)layoutSubviews {
     %orig;
     if (!ads()) return;
 
-    // A. Accessibility Scan (Sidebar Holiday / Report Button)
-    // Safety: Ensure accessibilityLabel is actually a string
+    // A. Accessibility Scan
     if ([self respondsToSelector:@selector(accessibilityLabel)]) {
         NSString *ax = self.accessibilityLabel;
         if (ax && [ax isKindOfClass:[NSString class]]) {
-            if ([ax localizedCaseInsensitiveContainsString:@"Holiday"] || 
-                [ax localizedCaseInsensitiveContainsString:@"Sale"] ||
-                [ax localizedCaseInsensitiveContainsString:@"Sponsored"] ||
-                [ax localizedCaseInsensitiveContainsString:@"Report"]) {
+            if ([ax localizedCaseInsensitiveContainsString:@"Sponsored"] ||
+                [ax localizedCaseInsensitiveContainsString:@"Advertisement"]) {
                 nuke(self);
                 return; 
             }
         }
     }
 
-    // B. Button Label Scan
-    if ([self isKindOfClass:[UIButton class]]) {
-        UIButton *btn = (UIButton *)self;
-        NSString *t = btn.currentTitle ?: @"";
-        if ([t localizedCaseInsensitiveContainsString:@"Report"] || 
-            [t localizedCaseInsensitiveContainsString:@"Hide"] ||
-            [t localizedCaseInsensitiveContainsString:@"Remove"]) {
-            nuke(self);
-            if (self.superview.frame.size.height < 150) nuke(self.superview); // Kill container
-            return;
-        }
-    }
-    
-    // C. Bottom Vacuum (Gray Bar Fix)
+    // B. Bottom Vacuum (Gray Bar Fix)
     CGFloat y = self.frame.origin.y;
     CGFloat h = self.frame.size.height;
     CGFloat screenH = [UIScreen mainScreen].bounds.size.height;
     
-    if (y >= (screenH - 120)) {
+    if (y >= (screenH - 150)) {
         NSString *cls = NSStringFromClass([self class]);
-        // SAFETY: Strictly ignore essential UI components
+        // SAFETY: Ignore TabBar/Input
         if ([self isKindOfClass:[UITabBar class]] || 
             [cls containsString:@"TabBar"] || 
             [cls containsString:@"Input"] || 
@@ -107,7 +131,7 @@ void nuke(UIView *v) {
 }
 %end
 
-// 2. Alert Blocker
+// 3. Alert Blocker (Something Went Wrong)
 %hook UIAlertController
 - (void)viewDidLoad {
     %orig;
@@ -119,8 +143,6 @@ void nuke(UIView *v) {
             [t localizedCaseInsensitiveContainsString:@"error"] ||
             [t localizedCaseInsensitiveContainsString:@"oops"]) {
             
-            // Just hide it immediately. 
-            // Do not dismiss() here as it triggers lifecycle crashes if called too early.
             self.view.hidden = YES;
             self.view.alpha = 0;
         }
@@ -128,25 +150,17 @@ void nuke(UIView *v) {
 }
 - (void)viewDidAppear:(BOOL)animated {
     %orig;
-    // Safe dismissal once view is loaded
     if (self.view.hidden) [self dismissViewControllerAnimated:NO completion:nil];
 }
-%end
-
-// 3. Feed Ad View (Explicit Kill)
-@interface IFNativeAdInfoView : UIView @end
-%hook IFNativeAdInfoView
-- (void)didMoveToWindow { %orig; if (ads()) nuke(self); }
-- (void)layoutSubviews { %orig; if (ads()) nuke(self); }
 %end
 %end // End UICleaner
 
 
-// --- POPUP ERASER (Safe Mode) ---
+// --- POPUP BLOCKER (Triple Tap Strategy) ---
 %group UpsellBlockers
 %hook UIViewController
 
-// 1. Block Presentation Logic
+// 1. Block Presentation
 - (void)presentViewController:(UIViewController *)vc animated:(BOOL)flag completion:(void (^)(void))completion {
     if (en(kIFBlockUpsells)) {
         NSString *name = NSStringFromClass([vc class]);
@@ -163,9 +177,8 @@ void nuke(UIView *v) {
     %orig;
 }
 
-// 2. Content Eraser: Let it load, but delete all subviews.
-// This prevents the "Close Button" from appearing because we delete it.
-- (void)viewWillAppear:(BOOL)animated {
+// 2. Content Eraser (Invisibility)
+- (void)viewDidLoad {
     %orig;
     if (en(kIFBlockUpsells)) {
         NSString *name = NSStringFromClass([self class]);
@@ -173,20 +186,14 @@ void nuke(UIView *v) {
             [name localizedCaseInsensitiveContainsString:@"Subscription"] || 
             [name localizedCaseInsensitiveContainsString:@"Upsell"]) {
             
-            // Make transparent
             self.view.backgroundColor = [UIColor clearColor];
-            self.view.opaque = NO;
-            
-            // Delete all subviews (Buttons, Labels, Images)
-            for (UIView *sub in self.view.subviews) {
-                sub.hidden = YES;
-                sub.alpha = 0;
-            }
+            self.view.userInteractionEnabled = NO;
+            for (UIView *sub in self.view.subviews) sub.hidden = YES;
         }
     }
 }
 
-// 3. Safe Dismissal
+// 3. FORCE DISMISS (The Fix for "GUI not closing")
 - (void)viewDidAppear:(BOOL)animated {
     %orig;
     if (en(kIFBlockUpsells)) {
@@ -195,8 +202,17 @@ void nuke(UIView *v) {
             [name localizedCaseInsensitiveContainsString:@"Subscription"] || 
             [name localizedCaseInsensitiveContainsString:@"Upsell"]) {
             
+            // Try 1: Dismiss Self
+            [self dismissViewControllerAnimated:NO completion:nil];
+            
+            // Try 2: Tell Parent to Dismiss (Stronger)
             dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.1 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-                [self dismissViewControllerAnimated:NO completion:nil];
+                [self.presentingViewController dismissViewControllerAnimated:NO completion:nil];
+            });
+            
+            // Try 3: Nuclear Option (Root VC Dismiss)
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                [[UIApplication sharedApplication].keyWindow.rootViewController dismissViewControllerAnimated:NO completion:nil];
             });
         }
     }
@@ -205,38 +221,63 @@ void nuke(UIView *v) {
 %end
 
 
-// --- AD SDK LOBOTOMY (No Return Values = No Crashes) ---
-%group AdBlockers
+// --- NETWORK REDIRECT (Keep this, it stops the crash) ---
+%group NetworkAssassin
 
-// 1. AppLovin
+BOOL isAdURL(NSURL *url) {
+    NSString *s = url.absoluteString.lowercaseString;
+    return ([s containsString:@"applovin"] || 
+            [s containsString:@"pangle"] || 
+            [s containsString:@"tiktokv"] || 
+            [s containsString:@"ironsource"] || 
+            [s containsString:@"supersonic"] ||
+            [s containsString:@"inmobi"] || 
+            [s containsString:@"amazon-adsystem"] || 
+            [s containsString:@"mopub"] ||
+            [s containsString:@"adjust"] ||
+            [s containsString:@"appsflyer"]);
+}
+
+%hook NSURLSession
+- (NSURLSessionDataTask *)dataTaskWithRequest:(NSURLRequest *)request completionHandler:(void (^)(NSData *, NSURLResponse *, NSError *))completionHandler {
+    if (ads() && isAdURL(request.URL)) {
+        NSMutableURLRequest *deadReq = [request mutableCopy];
+        deadReq.URL = [NSURL URLWithString:@"http://0.0.0.0"];
+        return %orig(deadReq, completionHandler);
+    }
+    return %orig;
+}
+- (NSURLSessionDataTask *)dataTaskWithURL:(NSURL *)url completionHandler:(void (^)(NSData *, NSURLResponse *, NSError *))completionHandler {
+    if (ads() && isAdURL(url)) {
+        return %orig([NSURL URLWithString:@"http://0.0.0.0"], completionHandler);
+    }
+    return %orig;
+}
+%end
+%end
+
+
+// --- AD SDK LOBOTOMY ---
+%group AdBlockers
 %hook ALAdService
 - (void)loadNextAd:(id)a andNotify:(id)b { if(ads()) return; %orig; }
 %end
-
-// 2. IronSource (Safe Block)
 %hook ISNativeAd
 - (void)loadAd { if(ads()) return; %orig; }
 - (void)loadAdWithViewController:(id)vc { if(ads()) return; %orig; }
 %end
-
-// 3. Pangle
 %hook PAGBannerAd
 - (void)loadAd:(id)a { if(ads()) return; %orig; }
 %end
 %hook PAGNativeAd
 - (void)loadAd:(id)a { if(ads()) return; %orig; }
 %end
-
-// 4. Amazon
 %hook DTBAdLoader
 - (void)loadAd:(id)a { if(ads()) return; %orig; }
 %end
-
-// 5. InMobi
 %hook IMBanner
 - (void)load { if(ads()) return; %orig; }
 %end
-
 %end
 
 // --- VIDEO SNIFFER ---
@@ -360,6 +401,7 @@ void openSettingsMenu() {
 
 %ctor {
     %init;
+    %init(NetworkAssassin);
     %init(AdBlockers);
     %init(UICleaner);
     %init(UpsellBlockers);

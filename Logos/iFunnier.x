@@ -8,7 +8,6 @@
 #define kIFNoWatermark @"kIFNoWatermark"
 #define kIFSaveVids @"kIFSaveVids"
 
-// --- GLOBAL STORAGE ---
 static NSURL *gLastPlayedURL = nil;
 
 // --- HELPERS ---
@@ -24,105 +23,171 @@ void showToast(NSString *msg) {
     });
 }
 
-// --- PREFS HELPERS ---
 BOOL en(NSString *k) { return [[NSUserDefaults standardUserDefaults] boolForKey:k]; }
 BOOL ads() { return en(kIFBlockAds); }
 BOOL upsells() { return en(kIFBlockUpsells); }
 
-// --- UI CLEANER (The Fix for Blank Spaces & Text) ---
+// --- UI CLEANER ENGINE ---
 %group UICleaner
 
-// Helper to collapse a view completely
-void killView(UIView *v) {
+void crushView(UIView *v) {
     if (!v) return;
     v.hidden = YES;
     v.alpha = 0;
+    v.userInteractionEnabled = NO;
     CGRect f = v.frame;
     f.size.height = 0;
     f.size.width = 0;
     v.frame = f;
 }
 
-// Hook Labels to catch "Holiday Sale" and "Hide Ads" text
+// 1. Hook Standard Text
 %hook UILabel
 - (void)setText:(NSString *)text {
     %orig;
     if (ads() && text.length > 0) {
-        // Fix 1: Holiday Sale (Top Right & Sidebar)
-        if ([text containsString:@"Holiday Sale"] || [text containsString:@"Sale"]) {
-            // Check if it's a short promo label (avoid hiding actual memes)
-            if (text.length < 20) {
-                self.hidden = YES;
-                killView(self.superview); // Kill the badge container
-            }
-            return;
-        }
+        NSString *clean = [text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
         
-        // Fix 2: "Hide Ads" (Bottom Right)
-        // If we see this, we are INSIDE the ad banner. Kill the parent!
-        if ([text isEqualToString:@"Hide Ads"]) {
+        // Holiday Sale / Premium Badges
+        if ([text containsString:@"Holiday"] || [text containsString:@"Sale"] || [text containsString:@"Premium"]) {
+            if (text.length < 30) { 
+                self.hidden = YES;
+                crushView(self.superview); 
+            }
+        }
+        // "Hide Ads" Button/Label (Case Insensitive Check)
+        if ([clean caseInsensitiveCompare:@"Hide Ads"] == NSOrderedSame || 
+            [clean caseInsensitiveCompare:@"Remove Ads"] == NSOrderedSame) {
             self.hidden = YES;
-            
-            // Walk up the hierarchy to find the main banner container
-            UIView *parent = self.superview;
-            for (int i = 0; i < 6; i++) {
-                if (!parent) break;
-                
-                // If view is at the bottom of screen and has banner-like height
-                if (parent.frame.size.height > 40 && parent.frame.size.height < 150) {
-                    killView(parent); // FOUND IT! Kill the blank space.
-                }
-                parent = parent.superview;
+            UIView *p = self.superview;
+            for (int i=0; i<8; i++) {
+                if (!p) break;
+                // Kill if it looks like a banner
+                if (p.frame.size.height > 30 && p.frame.size.height < 160) crushView(p);
+                p = p.superview;
             }
         }
     }
 }
-%end
 
-// Hook Buttons (Sometimes "Hide Ads" is a button)
-%hook UIButton
-- (void)setTitle:(NSString *)title forState:(UIControlState)state {
+// 2. Hook ATTRIBUTED Text (Crucial for stylized text)
+- (void)setAttributedText:(NSAttributedString *)text {
     %orig;
-    if (ads() && title.length > 0) {
-        if ([title isEqualToString:@"Hide Ads"]) {
+    if (ads() && text.string.length > 0) {
+        NSString *str = text.string;
+        if ([str containsString:@"Holiday"] || [str containsString:@"Sale"] || [str containsString:@"Premium"]) {
+            if (str.length < 30) {
+                self.hidden = YES;
+                crushView(self.superview);
+            }
+        }
+        if ([str containsString:@"Hide Ads"] || [str containsString:@"Remove Ads"]) {
             self.hidden = YES;
-            UIView *parent = self.superview;
-            for (int i = 0; i < 6; i++) {
-                if (!parent) break;
-                if (parent.frame.size.height > 40 && parent.frame.size.height < 150) {
-                    killView(parent);
-                }
-                parent = parent.superview;
+            UIView *p = self.superview;
+            for (int i=0; i<8; i++) {
+                if (!p) break;
+                if (p.frame.size.height > 30 && p.frame.size.height < 160) crushView(p);
+                p = p.superview;
             }
         }
     }
 }
 %end
 
-// Backup: Check for any view stuck at the bottom of the screen (Blank Placeholder)
+// 3. Hook Buttons
+%hook UIButton
+- (void)setTitle:(NSString *)t forState:(UIControlState)s {
+    %orig;
+    if (ads() && t.length > 0) {
+        if ([t containsString:@"Hide Ads"] || [t containsString:@"Remove Ads"]) {
+            self.hidden = YES;
+            UIView *p = self.superview;
+            for (int i=0; i<8; i++) {
+                if (!p) break;
+                if (p.frame.size.height > 30 && p.frame.size.height < 160) crushView(p);
+                p = p.superview;
+            }
+        }
+    }
+}
+%end
+
+// 4. Feed Ad Blank Spaces (Explicit Hook)
+@interface IFNativeAdInfoView : UIView @end
+%hook IFNativeAdInfoView
+- (void)didMoveToWindow { %orig; if (ads()) crushView(self); }
+- (void)layoutSubviews { %orig; if (ads()) crushView(self); }
+- (void)setHidden:(BOOL)h { if (ads()) %orig(YES); else %orig(h); }
+%end
+
+// 5. General Bottom Banner Cleaner
 %hook UIView
 - (void)layoutSubviews {
     %orig;
     if (ads()) {
-        // Heuristic: Is this a banner at the bottom?
+        CGFloat y = self.frame.origin.y;
+        CGFloat h = self.frame.size.height;
         CGFloat screenH = [UIScreen mainScreen].bounds.size.height;
-        if (self.frame.origin.y >= (screenH - 100) && self.frame.size.height > 40 && self.frame.size.height < 120) {
+        
+        // Detect Bottom Sticky Banner
+        if (y >= (screenH - 160) && h >= 40 && h <= 120) {
+            NSString *cls = NSStringFromClass([self class]);
+            if ([self isKindOfClass:[UITabBar class]] || [cls containsString:@"TabBar"] || [cls containsString:@"Input"]) return;
             
-            // Don't kill the Tab Bar! (Tab bar is usually exactly 49 or 83 high)
-            if ([self isKindOfClass:[UITabBar class]]) return;
-            if ([NSStringFromClass([self class]) containsString:@"TabBar"]) return;
-
-            // Check if it's an ad container (often has 'Banner', 'Ad', or 'Mopub' in name)
-            NSString *name = NSStringFromClass([self class]);
-            if ([name containsString:@"Banner"] || [name containsString:@"Ad"] || [name containsString:@"Pub"]) {
-                killView(self);
+            if ([cls containsString:@"Banner"] || [cls containsString:@"Ad"] || [cls containsString:@"Pub"] || [cls containsString:@"Sticky"]) {
+                crushView(self);
             }
         }
     }
 }
 %end
-
 %end // End UICleaner
+
+
+// --- UPSELL ASSASSIN (Startup Popup Killer) ---
+%group UpsellBlockers
+
+%hook UIViewController
+
+// Method 1: Prevent Presentation
+- (void)presentViewController:(UIViewController *)vc animated:(BOOL)flag completion:(void (^)(void))completion {
+    if (upsells()) {
+        NSString *name = NSStringFromClass([vc class]);
+        if ([name containsString:@"Premium"] || 
+            [name containsString:@"Subscription"] || 
+            [name containsString:@"Upsell"] || 
+            [name containsString:@"Offer"] || 
+            [name containsString:@"Sale"] ||
+            [name containsString:@"Purchase"]) {
+            
+            // showToast([NSString stringWithFormat:@"Blocked: %@", name]); // Debug
+            if (completion) completion();
+            return;
+        }
+    }
+    %orig;
+}
+
+// Method 2: Kill on Sight (For Startup Popups)
+- (void)viewWillAppear:(BOOL)animated {
+    %orig;
+    if (upsells()) {
+        NSString *name = NSStringFromClass([self class]);
+        if ([name containsString:@"Premium"] || 
+            [name containsString:@"Subscription"] || 
+            [name containsString:@"Upsell"] || 
+            [name containsString:@"Offer"] ||
+            [name containsString:@"Sale"]) {
+            
+            self.view.hidden = YES; // Hide visually immediately
+            [self dismissViewControllerAnimated:NO completion:nil]; // Close it
+        }
+    }
+}
+
+%end
+%end
+
 
 // --- VIDEO SNIFFER ---
 %hook AVPlayer
@@ -170,7 +235,7 @@ void downloadLastVideo() {
 }
 - (void)close { [self dismissViewControllerAnimated:YES completion:nil]; }
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView { return 1; }
-- (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section { return 4; }
+- (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section { return 3; }
 - (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
     UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:@"Cell" forIndexPath:indexPath];
     cell.selectionStyle = UITableViewCellSelectionStyleNone;
@@ -183,9 +248,8 @@ void downloadLastVideo() {
     NSUserDefaults *d = [NSUserDefaults standardUserDefaults];
     
     if (indexPath.row == 0) { txt = @"Block Ads / Upsells"; on = [d boolForKey:kIFBlockAds]; }
-    else if (indexPath.row == 1) { txt = @"Block Holiday Promos"; on = [d boolForKey:kIFBlockUpsells]; }
-    else if (indexPath.row == 2) { txt = @"No Watermark"; on = [d boolForKey:kIFNoWatermark]; }
-    else if (indexPath.row == 3) { txt = @"Auto-Save Video"; on = [d boolForKey:kIFSaveVids]; }
+    else if (indexPath.row == 1) { txt = @"No Watermark"; on = [d boolForKey:kIFNoWatermark]; }
+    else if (indexPath.row == 2) { txt = @"Auto-Save Video"; on = [d boolForKey:kIFSaveVids]; }
     
     cell.textLabel.text = txt;
     [sw setOn:on animated:NO];
@@ -193,7 +257,7 @@ void downloadLastVideo() {
     return cell;
 }
 - (void)t:(UISwitch *)s {
-    NSString *k = (s.tag==0)?kIFBlockAds:(s.tag==1)?kIFBlockUpsells:(s.tag==2)?kIFNoWatermark:kIFSaveVids;
+    NSString *k = (s.tag==0)?kIFBlockAds:(s.tag==1)?kIFNoWatermark:kIFSaveVids;
     [[NSUserDefaults standardUserDefaults] setBool:s.isOn forKey:k];
     [[NSUserDefaults standardUserDefaults] synchronize];
 }
@@ -207,7 +271,6 @@ void openSettingsMenu() {
     [root presentViewController:nav animated:YES completion:nil];
 }
 
-// --- SHARE BUTTONS ---
 @interface IFDownloadActivity : UIActivity @end
 @implementation IFDownloadActivity
 - (UIActivityType)activityType { return @"com.ifunnier.download"; }
@@ -237,7 +300,6 @@ void openSettingsMenu() {
 }
 %end
 
-// --- TRIPLE TAP BACKUP ---
 %hook UIWindow
 - (void)sendEvent:(UIEvent *)event {
     %orig;
@@ -250,7 +312,6 @@ void openSettingsMenu() {
 }
 %end
 
-// --- ADS & UPSELLS ---
 %group AdBlockers
 %hook ALAdService
 - (void)loadNextAd:(id)a andNotify:(id)b { if(ads()) return; %orig; }
@@ -267,41 +328,13 @@ void openSettingsMenu() {
 %hook ISNativeAd
 - (instancetype)initWithInteractionDelegate:(id)d { if(ads()) return nil; return %orig; }
 %end
-@interface IFNativeAdInfoView : UIView @end
-%hook IFNativeAdInfoView
-- (void)didMoveToWindow {
-    %orig;
-    if (ads()) {
-        self.hidden = YES;
-        self.alpha = 0;
-        CGRect f = self.frame;
-        f.size.height = 0;
-        self.frame = f;
-    }
-}
-%end
-%end
-
-%group UpsellBlockers
-%hook UIViewController
-- (void)presentViewController:(UIViewController *)vc animated:(BOOL)flag completion:(void (^)(void))completion {
-    if (upsells()) {
-        NSString *name = NSStringFromClass([vc class]);
-        if ([name containsString:@"Premium"] || [name containsString:@"Subscription"] || [name containsString:@"Upsell"]) {
-            if (completion) completion();
-            return;
-        }
-    }
-    %orig;
-}
-%end
 %end
 
 %ctor {
     %init;
     %init(AdBlockers);
+    %init(UICleaner);
     %init(UpsellBlockers);
-    %init(UICleaner); // Init new UI cleaner
     NSUserDefaults *d = [NSUserDefaults standardUserDefaults];
     if (![d objectForKey:kIFBlockAds]) [d setBool:YES forKey:kIFBlockAds];
     if (![d objectForKey:kIFBlockUpsells]) [d setBool:YES forKey:kIFBlockUpsells];

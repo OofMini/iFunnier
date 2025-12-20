@@ -1,4 +1,4 @@
-# iFunnier ( Work in progress, currently unstable. 
+# iFunnier ( Work in progress, currently unstable.)
 
 **iFunnier** is a tweak for iFunny that removes ads, removes watermarks, and allows saving of any content (images and videos).
 

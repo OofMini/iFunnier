@@ -1,7 +1,6 @@
 #import <Photos/Photos.h>
 #import <UIKit/UIKit.h>
 
-// Inherit from NSObject to prevent compiler errors
 @interface IFFeedCell : NSObject
 @property NSData *contentData;
 @end

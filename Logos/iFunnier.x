@@ -17,7 +17,7 @@ void showDebugAlert(NSString *title, NSString *message) {
     });
 }
 
-// --- 1. NUCLEAR AD BLOCKING (Hooks SDKs directly) ---
+// --- 1. NUCLEAR AD BLOCKING (Hooks SDKs directly - Default Group) ---
 
 // AppLovin (MAX)
 %hook ALAdService
@@ -41,7 +41,7 @@ void showDebugAlert(NSString *title, NSString *message) {
 - (void)showFrom:(id)arg1 { }
 %end
 
-// Pangle (Bytedance/TikTok Ads) - Found in your IPA
+// Pangle (Bytedance/TikTok Ads)
 %hook PAGBannerAd
 - (void)loadAd:(id)arg1 { }
 %end
@@ -50,23 +50,25 @@ void showDebugAlert(NSString *title, NSString *message) {
 - (void)loadAd:(id)arg1 { }
 %end
 
-// Amazon Publisher Services (DTB) - Found in your IPA
+// Amazon Publisher Services (DTB)
 %hook DTBAdLoader
 - (void)loadAd:(id)arg1 { }
 %end
 
 // --- 2. IFUNNY SPECIFIC HOOKS (Legacy Support) ---
+// FIX: Moved to a named group to prevent "re-init" errors
+%group LegacyAds
 %hook AdvertisementAvailableServiceImpl
 - (BOOL)isBannerEnabled { return NO; }
 - (BOOL)isNativeEnabled { return NO; }
 - (BOOL)isRewardEnabled { return NO; }
 %end
+%end
 
-// --- 3. SAVING & WATERMARK REMOVAL ---
+// --- 3. SAVING & WATERMARK REMOVAL (Default Group) ---
 %hook FCSaveToGalleryActivity
 
 - (void)save {
-    // Attempt to get variables safely
     NSURL *gifURL = nil;
     UIImage *image = nil;
     
@@ -84,7 +86,6 @@ void showDebugAlert(NSString *title, NSString *message) {
     if (gifURL) {
         %orig;
     } else if (image) {
-        // Crop Watermark
         if (image.size.height > 22.0) {
             CGRect cropRect = CGRectMake(0, 0, image.size.width, image.size.height - 20);
             CGImageRef imageRef = CGImageCreateWithImageInRect([image CGImage], cropRect);
@@ -123,9 +124,7 @@ void showDebugAlert(NSString *title, NSString *message) {
 }
 %end
 
-// --- 4. DIAGNOSTIC TOOLS ---
-
-// Confirm Injection on Startup
+// --- 4. DIAGNOSTIC TOOLS (Default Group) ---
 %hook UIWindow
 - (void)makeKeyAndVisible {
     %orig;
@@ -135,7 +134,6 @@ void showDebugAlert(NSString *title, NSString *message) {
     });
 }
 
-// 3-Finger Tap to Identify Current Screen (Use this to find the Feed Controller name)
 - (void)sendEvent:(UIEvent *)event {
     %orig;
     if (event.type == UIEventTypeTouches) {
@@ -153,10 +151,12 @@ void showDebugAlert(NSString *title, NSString *message) {
 %end
 
 %ctor {
-    %init;
-    // Try to init the old ad class if it exists
+    %init; // Initialize Default Group (SDK Blockers, Saving, Inspector)
+    
+    // Check for Legacy Ad Class
     Class oldAdClass = NSClassFromString(@"AdvertisementAvailableServiceImpl") ?: NSClassFromString(@"libFunny.AdvertisementAvailableServiceImpl");
     if (oldAdClass) {
-        %init(AdvertisementAvailableServiceImpl = oldAdClass);
+        // FIX: Initialize ONLY the LegacyAds group
+        %init(LegacyAds, AdvertisementAvailableServiceImpl = oldAdClass);
     }
 }

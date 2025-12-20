@@ -12,7 +12,7 @@ jobs:
     name: Build and Inject
     runs-on: macos-latest
     permissions:
-      contents: write
+      contents: write  # REQUIRED for creating releases
 
     env:
       THEOS: ${{ github.workspace }}/theos
@@ -26,7 +26,7 @@ jobs:
       - name: Install Dependencies
         run: |
           brew install make ldid dpkg wget
-          # Install Pyzule (Cyan) - The same tool used in YTLite
+          # Install Pyzule (Cyan)
           pipx install --force https://github.com/asdfzxcvbn/pyzule-rw/archive/main.zip
 
       - name: Setup Theos
@@ -50,7 +50,7 @@ jobs:
         run: |
           make package DEBUG=0 FINALPACKAGE=1
           
-          # Move the compiled DEB to a clean location
+          # Move to a clean path for Pyzule
           mkdir -p ${{ github.workspace }}/build_output
           mv packages/*.deb ${{ github.workspace }}/build_output/iFunnier.deb
           
@@ -61,10 +61,10 @@ jobs:
 
       - name: Download IPA
         run: |
-          # Use the exact wget logic from the YTLite reference
+          # Robust download logic matching YTLite
           wget "${{ inputs.ipa_url }}" --no-verbose -O ${{ github.workspace }}/ifunny.ipa
 
-          # Verify it's a real IPA/Zip file
+          # Verify File Type
           file_type=$(file --mime-type -b ${{ github.workspace }}/ifunny.ipa)
           if [[ "$file_type" != "application/x-ios-app" && "$file_type" != "application/zip" && "$file_type" != "application/octet-stream" ]]; then
             echo "::error::Validation failed: The downloaded file is not a valid IPA. Detected type: $file_type"
@@ -73,16 +73,20 @@ jobs:
 
       - name: Inject Tweak (Cyan)
         run: |
-          # Use Pyzule (cyan) to inject, just like YTLite
-          # -i: Input IPA
-          # -o: Output IPA
-          # -f: Tweak file (.deb)
+          # Inject using Cyan (Pyzule)
           cyan -i ${{ github.workspace }}/ifunny.ipa \
                -o ${{ github.workspace }}/iFunnier_Patched.ipa \
                -f ${{ github.workspace }}/build_output/iFunnier.deb
 
-      - name: Upload Artifact
-        uses: actions/upload-artifact@v4
+      - name: Create Draft Release
+        uses: softprops/action-gh-release@v2
         with:
-          name: iFunnier-Patched-IPA
-          path: ${{ github.workspace }}/iFunnier_Patched.ipa
+          tag_name: v1.3-${{ github.run_number }}
+          name: iFunnier v1.3 (Build ${{ github.run_number }})
+          files: ${{ github.workspace }}/iFunnier_Patched.ipa
+          draft: true
+          body: |
+            ### iFunnier Build ${{ github.run_number }}
+            - **Source IPA**: ${{ inputs.ipa_url }}
+            - **Injection Tool**: Cyan (Pyzule)
+            - **Status**: Draft Release

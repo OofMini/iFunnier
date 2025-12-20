@@ -9,7 +9,6 @@ include $(THEOS)/makefiles/common.mk
 TWEAK_NAME = iFunnier
 
 iFunnier_FILES = Logos/iFunnier.x
-# Flags to silence deprecation warnings and allow UI code
 iFunnier_CFLAGS = -fobjc-arc -Wno-deprecated-declarations -Wno-error
 iFunnier_FRAMEWORKS = UIKit Foundation CoreGraphics
 

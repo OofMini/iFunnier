@@ -55,15 +55,29 @@ jobs:
 
       - name: Download and Verify IPA
         run: |
-          # Matches the working YTLite logic exactly
+          echo "Downloading from: ${{ inputs.ipa_url }}"
+          
+          # Use wget just like the YTLite workflow
           wget "${{ inputs.ipa_url }}" --no-verbose -O ifunny.ipa
 
-          # Validate file type (Magic numbers check)
-          file_type=$(file --mime-type -b ifunny.ipa)
-
-          if [[ "$file_type" != "application/x-ios-app" && "$file_type" != "application/zip" ]]; then
-            echo "::error::Validation failed: The downloaded file is not a valid IPA. Detected type: $file_type."
-            exit 1
+          # DEBUG: Check what kind of file we actually got
+          FILE_TYPE=$(file --mime-type -b ifunny.ipa)
+          echo "Detected File Type: $FILE_TYPE"
+          
+          # If it's not a zip/ipa, print the content so we can see the error
+          if [[ "$FILE_TYPE" != "application/x-ios-app" && "$FILE_TYPE" != "application/zip" && "$FILE_TYPE" != "application/octet-stream" ]]; then
+             echo "::error::CRITICAL: Download is not an IPA. It is likely a website or error page."
+             echo "---------------------------------------------------"
+             echo "FILE CONTENT PREVIEW (First 20 lines):"
+             head -n 20 ifunny.ipa
+             echo "---------------------------------------------------"
+             exit 1
+          fi
+          
+          # Double check with unzip just to be safe
+          if ! unzip -tq ifunny.ipa; then
+             echo "::error::CRITICAL: The file is a ZIP type but is corrupt or invalid."
+             exit 1
           fi
           
           echo "IPA verified successfully."

@@ -12,7 +12,7 @@ jobs:
     name: Build and Inject
     runs-on: macos-latest
     permissions:
-      contents: write  # REQUIRED for creating releases
+      contents: write  # REQUIRED for releases
 
     env:
       THEOS: ${{ github.workspace }}/theos
@@ -50,7 +50,7 @@ jobs:
         run: |
           make package DEBUG=0 FINALPACKAGE=1
           
-          # Move to a clean path for Pyzule
+          # Move to clean path for Pyzule
           mkdir -p ${{ github.workspace }}/build_output
           mv packages/*.deb ${{ github.workspace }}/build_output/iFunnier.deb
           
@@ -61,7 +61,6 @@ jobs:
 
       - name: Download IPA
         run: |
-          # Robust download logic matching YTLite
           wget "${{ inputs.ipa_url }}" --no-verbose -O ${{ github.workspace }}/ifunny.ipa
 
           # Verify File Type
@@ -73,7 +72,6 @@ jobs:
 
       - name: Inject Tweak (Cyan)
         run: |
-          # Inject using Cyan (Pyzule)
           cyan -i ${{ github.workspace }}/ifunny.ipa \
                -o ${{ github.workspace }}/iFunnier_Patched.ipa \
                -f ${{ github.workspace }}/build_output/iFunnier.deb

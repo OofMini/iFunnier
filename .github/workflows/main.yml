@@ -26,6 +26,8 @@ jobs:
       - name: Install Dependencies
         run: |
           brew install make ldid dpkg wget
+          # Install Pyzule (Cyan) - The same tool used in YTLite
+          pipx install --force https://github.com/asdfzxcvbn/pyzule-rw/archive/main.zip
 
       - name: Setup Theos
         uses: actions/checkout@v4
@@ -48,53 +50,39 @@ jobs:
         run: |
           make package DEBUG=0 FINALPACKAGE=1
           
-          if [ ! -f packages/*.deb ]; then
+          # Move the compiled DEB to a clean location
+          mkdir -p ${{ github.workspace }}/build_output
+          mv packages/*.deb ${{ github.workspace }}/build_output/iFunnier.deb
+          
+          if [ ! -f ${{ github.workspace }}/build_output/iFunnier.deb ]; then
              echo "::error::Build failed! No .deb file found."
              exit 1
           fi
 
-      - name: Download and Verify IPA
+      - name: Download IPA
         run: |
-          echo "Downloading from: ${{ inputs.ipa_url }}"
-          
-          # Use wget just like the YTLite workflow
-          wget "${{ inputs.ipa_url }}" --no-verbose -O ifunny.ipa
+          # Use the exact wget logic from the YTLite reference
+          wget "${{ inputs.ipa_url }}" --no-verbose -O ${{ github.workspace }}/ifunny.ipa
 
-          # DEBUG: Check what kind of file we actually got
-          FILE_TYPE=$(file --mime-type -b ifunny.ipa)
-          echo "Detected File Type: $FILE_TYPE"
-          
-          # If it's not a zip/ipa, print the content so we can see the error
-          if [[ "$FILE_TYPE" != "application/x-ios-app" && "$FILE_TYPE" != "application/zip" && "$FILE_TYPE" != "application/octet-stream" ]]; then
-             echo "::error::CRITICAL: Download is not an IPA. It is likely a website or error page."
-             echo "---------------------------------------------------"
-             echo "FILE CONTENT PREVIEW (First 20 lines):"
-             head -n 20 ifunny.ipa
-             echo "---------------------------------------------------"
-             exit 1
+          # Verify it's a real IPA/Zip file
+          file_type=$(file --mime-type -b ${{ github.workspace }}/ifunny.ipa)
+          if [[ "$file_type" != "application/x-ios-app" && "$file_type" != "application/zip" && "$file_type" != "application/octet-stream" ]]; then
+            echo "::error::Validation failed: The downloaded file is not a valid IPA. Detected type: $file_type"
+            exit 1
           fi
-          
-          # Double check with unzip just to be safe
-          if ! unzip -tq ifunny.ipa; then
-             echo "::error::CRITICAL: The file is a ZIP type but is corrupt or invalid."
-             exit 1
-          fi
-          
-          echo "IPA verified successfully."
 
-      - name: Inject Tweak (Azule)
+      - name: Inject Tweak (Cyan)
         run: |
-          git clone --depth 1 https://github.com/Al4ise/Azule
-          chmod +x Azule/azule
-
-          DEB_FILE=$(ls packages/*.deb | head -n 1)
-          echo "Injecting $DEB_FILE..."
-
-          # Inject (-s skips signing)
-          ./Azule/azule -i ifunny.ipa -o iFunnier_Patched.ipa -f "$DEB_FILE" -n "iFunnier" -s
+          # Use Pyzule (cyan) to inject, just like YTLite
+          # -i: Input IPA
+          # -o: Output IPA
+          # -f: Tweak file (.deb)
+          cyan -i ${{ github.workspace }}/ifunny.ipa \
+               -o ${{ github.workspace }}/iFunnier_Patched.ipa \
+               -f ${{ github.workspace }}/build_output/iFunnier.deb
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: iFunnier-Patched-IPA
-          path: iFunnier_Patched.ipa
+          path: ${{ github.workspace }}/iFunnier_Patched.ipa

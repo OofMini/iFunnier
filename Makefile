@@ -9,7 +9,8 @@ include $(THEOS)/makefiles/common.mk
 TWEAK_NAME = iFunnier
 
 iFunnier_FILES = Logos/iFunnier.x
-iFunnier_CFLAGS = -fobjc-arc
+# FIX: Added flags to ignore 'keyWindow' deprecation errors
+iFunnier_CFLAGS = -fobjc-arc -Wno-deprecated-declarations -Wno-error
 iFunnier_FRAMEWORKS = UIKit Foundation
 
 include $(THEOS_MAKE_PATH)/tweak.mk

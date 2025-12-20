@@ -21,29 +21,22 @@ void showToast(NSString *msg) {
     });
 }
 
-// --- SMART DOWNLOADER (Recursive View Scanner) ---
-// This finds the video without needing to know the Controller Name
+// --- SMART DOWNLOADER ---
 NSData* findVideoDataInView(UIView *v) {
     if (!v) return nil;
-    
-    // 1. Check if this view itself has data (e.g. a Cell)
     if ([v respondsToSelector:@selector(contentData)]) {
         NSData *d = [v performSelector:@selector(contentData)];
         if (d && [d isKindOfClass:[NSData class]] && d.length > 0) return d;
     }
-    
-    // 2. Scan Subviews (Breadth-First is safer, but Depth-First is easier here)
     for (UIView *sub in v.subviews) {
         NSData *found = findVideoDataInView(sub);
         if (found) return found;
     }
-    
     return nil;
 }
 
 void saveVideoData(NSData *data) {
     if (!data) { showToast(@"❌ Error: No Video Data Found"); return; }
-    
     NSString *path = [NSTemporaryDirectory() stringByAppendingPathComponent:[NSString stringWithFormat:@"if_%@.mp4", [[NSUUID UUID] UUIDString]]];
     [data writeToFile:path atomically:YES];
     
@@ -55,9 +48,7 @@ void saveVideoData(NSData *data) {
         if (img) {
             UIImageWriteToSavedPhotosAlbum(img, nil, nil, nil);
             showToast(@"✅ Image Saved to Photos");
-        } else {
-            showToast(@"❌ Error: Unknown Media Type");
-        }
+        } else { showToast(@"❌ Error: Unknown Media Type"); }
     }
 }
 
@@ -66,12 +57,10 @@ void smartDownload() {
         UIWindow *w = [UIApplication sharedApplication].keyWindow;
         if (!w) { showToast(@"❌ No Active Window"); return; }
         
-        // Scan the entire screen for a view holding data
         NSData *d = findVideoDataInView(w);
         if (d) {
             saveVideoData(d);
         } else {
-            // Fallback: Check for 'activeCell' on top controller if scanner failed
             UIViewController *root = w.rootViewController;
             while (root.presentedViewController) root = root.presentedViewController;
             
@@ -84,9 +73,7 @@ void smartDownload() {
             }
             showToast(@"❌ Could not find video on screen.");
         }
-    } @catch (NSException *e) {
-        showToast(@"❌ Error during scan.");
-    }
+    } @catch (NSException *e) { showToast(@"❌ Error during scan."); }
 }
 
 // --- SETTINGS VC ---
@@ -183,7 +170,7 @@ void openSettingsMenu() {
 }
 %end
 
-// --- NUCLEAR AD & UPSELL BLOCKER ---
+// --- ADS & UPSELLS ---
 BOOL en(NSString *k) { return [[NSUserDefaults standardUserDefaults] boolForKey:k]; }
 BOOL ads() { return en(kIFBlockAds); }
 BOOL upsells() { return en(kIFBlockUpsells); }
@@ -200,7 +187,7 @@ BOOL upsells() { return en(kIFBlockUpsells); }
 - (void)load { if(ads()) return; %orig; }
 %end
 
-// 3. Pangle (PAGAdSDK - Found in your IPA)
+// 3. Pangle
 %hook PAGBannerAd
 - (void)loadAd:(id)a { if(ads()) return; %orig; }
 %end
@@ -208,25 +195,27 @@ BOOL upsells() { return en(kIFBlockUpsells); }
 - (void)loadAd:(id)a { if(ads()) return; %orig; }
 %end
 
-// 4. Amazon (DTB)
+// 4. Amazon
 %hook DTBAdLoader
 - (void)loadAd:(id)a { if(ads()) return; %orig; }
 %end
 
-// 5. IronSource (ISNativeAd - Feed Ads)
-// Hooking initialization to fail immediately
+// 5. IronSource
 %hook ISNativeAd
 - (instancetype)initWithInteractionDelegate:(id)d { if(ads()) return nil; return %orig; }
 %end
 
-// 6. Native Feed Ad View (IFNativeAdInfoView - Found in your IPA)
+// 6. Native Feed Ad View (FIX: Correct Interface)
+// Explicitly tell compiler this is a UIView
+@interface IFNativeAdInfoView : UIView
+@end
+
 %hook IFNativeAdInfoView
 - (void)didMoveToWindow {
     %orig;
     if (ads()) {
         self.hidden = YES;
         self.alpha = 0;
-        // Collapse frame to remove gap
         CGRect f = self.frame;
         f.size.height = 0;
         self.frame = f;
@@ -236,19 +225,16 @@ BOOL upsells() { return en(kIFBlockUpsells); }
 %end // End AdBlockers
 
 
-// --- UPSELL BLOCKER (Premium Popups) ---
+// --- UPSELL BLOCKER ---
 %group UpsellBlockers
 %hook UIViewController
 - (void)presentViewController:(UIViewController *)vc animated:(BOOL)flag completion:(void (^)(void))completion {
     if (upsells()) {
         NSString *name = NSStringFromClass([vc class]);
-        // Block known upsell classes
         if ([name containsString:@"Premium"] || 
             [name containsString:@"Subscription"] || 
             [name containsString:@"Upsell"] ||
             [name containsString:@"Paywall"]) {
-            
-            // showToast([NSString stringWithFormat:@"🛡️ Blocked: %@", name]); // Optional Debug
             if (completion) completion();
             return;
         }
@@ -256,13 +242,12 @@ BOOL upsells() { return en(kIFBlockUpsells); }
     %orig;
 }
 %end
-%end // End UpsellBlockers
+%end
 
 %ctor {
     %init;
     %init(AdBlockers);
     %init(UpsellBlockers);
-    
     NSUserDefaults *d = [NSUserDefaults standardUserDefaults];
     if (![d objectForKey:kIFBlockAds]) [d setBool:YES forKey:kIFBlockAds];
     if (![d objectForKey:kIFBlockUpsells]) [d setBool:YES forKey:kIFBlockUpsells];

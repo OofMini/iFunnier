@@ -26,46 +26,7 @@ void showToast(NSString *msg) {
 BOOL en(NSString *k) { return [[NSUserDefaults standardUserDefaults] boolForKey:k]; }
 BOOL ads() { return en(kIFBlockAds); }
 
-// --- NETWORK ASSASSIN (The "Nuclear" AdBlock) ---
-%group NetworkAssassin
-
-BOOL isAdURL(NSURL *url) {
-    NSString *s = url.absoluteString.lowercaseString;
-    return ([s containsString:@"applovin"] || 
-            [s containsString:@"pangle"] || 
-            [s containsString:@"tiktokv"] || // Pangle uses tiktokv domains
-            [s containsString:@"ironsource"] || 
-            [s containsString:@"supersonic"] || // IronSource legacy
-            [s containsString:@"inmobi"] || 
-            [s containsString:@"amazon-adsystem"] || 
-            [s containsString:@"ads"] && [s containsString:@"api"]); // Generic catch
-}
-
-%hook NSURLSession
-- (NSURLSessionDataTask *)dataTaskWithRequest:(NSURLRequest *)request completionHandler:(void (^)(NSData *, NSURLResponse *, NSError *))completionHandler {
-    if (ads() && isAdURL(request.URL)) {
-        // Silently fail the request
-        if (completionHandler) {
-            completionHandler(nil, nil, [NSError errorWithDomain:NSURLErrorDomain code:NSURLErrorCancelled userInfo:nil]);
-        }
-        return nil;
-    }
-    return %orig;
-}
-- (NSURLSessionDataTask *)dataTaskWithURL:(NSURL *)url completionHandler:(void (^)(NSData *, NSURLResponse *, NSError *))completionHandler {
-    if (ads() && isAdURL(url)) {
-        if (completionHandler) {
-            completionHandler(nil, nil, [NSError errorWithDomain:NSURLErrorDomain code:NSURLErrorCancelled userInfo:nil]);
-        }
-        return nil;
-    }
-    return %orig;
-}
-%end
-%end
-
-
-// --- UI CLEANER (Continuous Enforcement) ---
+// --- UI CLEANER (Crash-Proof Edition) ---
 %group UICleaner
 
 void nuke(UIView *v) {
@@ -80,26 +41,28 @@ void nuke(UIView *v) {
     v.frame = f;
 }
 
-// 1. Universal Scanner (Now runs on ALL views)
+// 1. Universal View Scanner
 %hook UIView
 - (void)layoutSubviews {
     %orig;
     if (!ads()) return;
 
-    // A. Accessibility & Label Scan (Sidebar Holiday & Report Button)
-    NSString *ax = self.accessibilityLabel;
-    
-    // Check Accessibility Label
-    if (ax && [ax isKindOfClass:[NSString class]]) {
-        if ([ax localizedCaseInsensitiveContainsString:@"Holiday"] || 
-            [ax localizedCaseInsensitiveContainsString:@"Sale"] ||
-            [ax localizedCaseInsensitiveContainsString:@"Report"]) {
-            nuke(self);
-            return;
+    // A. Accessibility Scan (Sidebar Holiday / Report Button)
+    // Safety: Ensure accessibilityLabel is actually a string
+    if ([self respondsToSelector:@selector(accessibilityLabel)]) {
+        NSString *ax = self.accessibilityLabel;
+        if (ax && [ax isKindOfClass:[NSString class]]) {
+            if ([ax localizedCaseInsensitiveContainsString:@"Holiday"] || 
+                [ax localizedCaseInsensitiveContainsString:@"Sale"] ||
+                [ax localizedCaseInsensitiveContainsString:@"Sponsored"] ||
+                [ax localizedCaseInsensitiveContainsString:@"Report"]) {
+                nuke(self);
+                return; 
+            }
         }
     }
 
-    // Check Buttons specifically
+    // B. Button Label Scan
     if ([self isKindOfClass:[UIButton class]]) {
         UIButton *btn = (UIButton *)self;
         NSString *t = btn.currentTitle ?: @"";
@@ -111,19 +74,20 @@ void nuke(UIView *v) {
             return;
         }
     }
-
-    // B. Bottom Vacuum (The "Gray Bar" Fix)
+    
+    // C. Bottom Vacuum (Gray Bar Fix)
     CGFloat y = self.frame.origin.y;
     CGFloat h = self.frame.size.height;
     CGFloat screenH = [UIScreen mainScreen].bounds.size.height;
     
-    if (y >= (screenH - 150)) {
+    if (y >= (screenH - 120)) {
         NSString *cls = NSStringFromClass([self class]);
-        // SAFETY: Ignore TabBar/Input
+        // SAFETY: Strictly ignore essential UI components
         if ([self isKindOfClass:[UITabBar class]] || 
             [cls containsString:@"TabBar"] || 
             [cls containsString:@"Input"] || 
-            [cls containsString:@"Keyboard"]) return;
+            [cls containsString:@"Keyboard"] ||
+            [cls containsString:@"Composer"]) return;
 
         // Kill Banners
         if ([cls containsString:@"Banner"] || [cls containsString:@"Ad"] || [cls containsString:@"Pub"]) {
@@ -134,7 +98,7 @@ void nuke(UIView *v) {
         // Kill Blur Effects (Gray Bar)
         if ([self isKindOfClass:[UIVisualEffectView class]] && h < 100) nuke(self);
 
-        // Kill Generic Placeholders (Empty white/gray boxes)
+        // Kill Generic Placeholders
         if ((h >= 49 && h <= 51) || (h >= 89 && h <= 95)) {
              if (self.subviews.count == 0) nuke(self);
              else self.backgroundColor = [UIColor clearColor];
@@ -143,71 +107,137 @@ void nuke(UIView *v) {
 }
 %end
 
-// 2. Alert Blocker (Aggressive)
+// 2. Alert Blocker
 %hook UIAlertController
-- (void)viewWillAppear:(BOOL)animated {
+- (void)viewDidLoad {
     %orig;
     if (ads()) {
         NSString *t = self.title ?: @"";
         NSString *m = self.message ?: @"";
         if ([t localizedCaseInsensitiveContainsString:@"wrong"] || 
             [m localizedCaseInsensitiveContainsString:@"wrong"] ||
-            [t localizedCaseInsensitiveContainsString:@"error"]) {
+            [t localizedCaseInsensitiveContainsString:@"error"] ||
+            [t localizedCaseInsensitiveContainsString:@"oops"]) {
+            
+            // Just hide it immediately. 
+            // Do not dismiss() here as it triggers lifecycle crashes if called too early.
             self.view.hidden = YES;
-            [self dismissViewControllerAnimated:NO completion:nil];
+            self.view.alpha = 0;
         }
     }
 }
+- (void)viewDidAppear:(BOOL)animated {
+    %orig;
+    // Safe dismissal once view is loaded
+    if (self.view.hidden) [self dismissViewControllerAnimated:NO completion:nil];
+}
+%end
+
+// 3. Feed Ad View (Explicit Kill)
+@interface IFNativeAdInfoView : UIView @end
+%hook IFNativeAdInfoView
+- (void)didMoveToWindow { %orig; if (ads()) nuke(self); }
+- (void)layoutSubviews { %orig; if (ads()) nuke(self); }
 %end
 %end // End UICleaner
 
 
-// --- LAYER KILLER (Popup Assassin) ---
+// --- POPUP ERASER (Safe Mode) ---
 %group UpsellBlockers
-%hook CALayer
-- (void)addSublayer:(CALayer *)layer {
-    if (en(kIFBlockUpsells)) {
-        // Check the Delegate (The View owning this layer)
-        id delegate = layer.delegate;
-        if (delegate && [delegate isKindOfClass:[UIView class]]) {
-            UIView *v = (UIView *)delegate;
-            // Identify if this view belongs to a Premium VC
-            UIResponder *next = v.nextResponder;
-            while (next) {
-                if ([next isKindOfClass:[UIViewController class]]) {
-                    NSString *name = NSStringFromClass([next class]);
-                    if ([name localizedCaseInsensitiveContainsString:@"Premium"] || 
-                        [name localizedCaseInsensitiveContainsString:@"Subscription"] || 
-                        [name localizedCaseInsensitiveContainsString:@"Upsell"]) {
-                        return; // DENY: Do not add this layer to screen.
-                    }
-                    break;
-                }
-                next = next.nextResponder;
-            }
-        }
-    }
-    %orig;
-}
-%end
-
-// Backup: Standard VC Block
 %hook UIViewController
+
+// 1. Block Presentation Logic
 - (void)presentViewController:(UIViewController *)vc animated:(BOOL)flag completion:(void (^)(void))completion {
     if (en(kIFBlockUpsells)) {
         NSString *name = NSStringFromClass([vc class]);
         if ([name localizedCaseInsensitiveContainsString:@"Premium"] || 
             [name localizedCaseInsensitiveContainsString:@"Subscription"] || 
-            [name localizedCaseInsensitiveContainsString:@"Upsell"]) {
-            if (completion) completion();
+            [name localizedCaseInsensitiveContainsString:@"Upsell"] ||
+            [name localizedCaseInsensitiveContainsString:@"Offer"] ||
+            [name localizedCaseInsensitiveContainsString:@"Sale"]) {
+            
+            if (completion) completion(); 
             return;
         }
     }
     %orig;
 }
+
+// 2. Content Eraser: Let it load, but delete all subviews.
+// This prevents the "Close Button" from appearing because we delete it.
+- (void)viewWillAppear:(BOOL)animated {
+    %orig;
+    if (en(kIFBlockUpsells)) {
+        NSString *name = NSStringFromClass([self class]);
+        if ([name localizedCaseInsensitiveContainsString:@"Premium"] || 
+            [name localizedCaseInsensitiveContainsString:@"Subscription"] || 
+            [name localizedCaseInsensitiveContainsString:@"Upsell"]) {
+            
+            // Make transparent
+            self.view.backgroundColor = [UIColor clearColor];
+            self.view.opaque = NO;
+            
+            // Delete all subviews (Buttons, Labels, Images)
+            for (UIView *sub in self.view.subviews) {
+                sub.hidden = YES;
+                sub.alpha = 0;
+            }
+        }
+    }
+}
+
+// 3. Safe Dismissal
+- (void)viewDidAppear:(BOOL)animated {
+    %orig;
+    if (en(kIFBlockUpsells)) {
+        NSString *name = NSStringFromClass([self class]);
+        if ([name localizedCaseInsensitiveContainsString:@"Premium"] || 
+            [name localizedCaseInsensitiveContainsString:@"Subscription"] || 
+            [name localizedCaseInsensitiveContainsString:@"Upsell"]) {
+            
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.1 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                [self dismissViewControllerAnimated:NO completion:nil];
+            });
+        }
+    }
+}
 %end
 %end
 
+
+// --- AD SDK LOBOTOMY (No Return Values = No Crashes) ---
+%group AdBlockers
+
+// 1. AppLovin
+%hook ALAdService
+- (void)loadNextAd:(id)a andNotify:(id)b { if(ads()) return; %orig; }
+%end
+
+// 2. IronSource (Safe Block)
+%hook ISNativeAd
+- (void)loadAd { if(ads()) return; %orig; }
+- (void)loadAdWithViewController:(id)vc { if(ads()) return; %orig; }
+%end
+
+// 3. Pangle
+%hook PAGBannerAd
+- (void)loadAd:(id)a { if(ads()) return; %orig; }
+%end
+%hook PAGNativeAd
+- (void)loadAd:(id)a { if(ads()) return; %orig; }
+%end
+
+// 4. Amazon
+%hook DTBAdLoader
+- (void)loadAd:(id)a { if(ads()) return; %orig; }
+%end
+
+// 5. InMobi
+%hook IMBanner
+- (void)load { if(ads()) return; %orig; }
+%end
+
+%end
 
 // --- VIDEO SNIFFER ---
 %hook AVPlayer
@@ -330,7 +360,7 @@ void openSettingsMenu() {
 
 %ctor {
     %init;
-    %init(NetworkAssassin);
+    %init(AdBlockers);
     %init(UICleaner);
     %init(UpsellBlockers);
     NSUserDefaults *d = [NSUserDefaults standardUserDefaults];

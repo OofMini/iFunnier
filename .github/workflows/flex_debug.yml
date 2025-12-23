@@ -28,12 +28,22 @@ jobs:
           # 1. Download User IPA
           wget "${{ inputs.ipa_url }}" --no-verbose -O ${{ github.workspace }}/ifunny.ipa
 
-          # 2. Download FLEXall (.deb)
-          # We use a known working version of FLEXall which is more stable than raw libFLEX
-          wget "https://github.com/dgh0st/FLEXall/raw/master/packages/com.dgh0st.flexall_0.0.1-24_iphoneos-arm.deb" --no-verbose -O ${{ github.workspace }}/FLEXall.deb || \
-          wget "https://github.com/NSExceptional/FLEXing/releases/download/1.2/com.pantsthief.flexing_1.2_iphoneos-arm.deb" --no-verbose -O ${{ github.workspace }}/FLEXall.deb
+          # 2. Download FLEXall (.deb) from DGh0st's Repo
+          # We use the 'Files' repo where the actual debs are stored
+          wget "https://github.com/DGh0st/Files/raw/master/debs/com.dgh0st.flexall_0.0.1-24_iphoneos-arm.deb" \
+            --no-verbose -O ${{ github.workspace }}/FLEXall.deb
 
-          # Verify IPA
+          # 3. Download libFLEX.dylib (Required Dependency)
+          wget "https://github.com/oa414/libFLEX/raw/master/libFLEX.dylib" \
+            --no-verbose -O ${{ github.workspace }}/libFLEX.dylib
+
+          # Verify Files Exist
+          if [ ! -f "${{ github.workspace }}/FLEXall.deb" ]; then
+            echo "::error::Failed to download FLEXall.deb"
+            exit 1
+          fi
+
+          # Verify IPA Validity
           file_type=$(file --mime-type -b ${{ github.workspace }}/ifunny.ipa)
           if [[ "$file_type" != "application/x-ios-app" && "$file_type" != "application/zip" && "$file_type" != "application/octet-stream" ]]; then
             echo "::error::Validation failed: The downloaded file is not a valid IPA."
@@ -42,10 +52,11 @@ jobs:
 
       - name: Inject FLEX (Cyan)
         run: |
-          # Inject the .deb directly. Cyan handles extracting the dylib and merging the plist.
+          # Inject BOTH the .deb (loader) and the .dylib (library)
+          # This ensures the app has everything it needs to launch the toolbar
           cyan -i ${{ github.workspace }}/ifunny.ipa \
                -o ${{ github.workspace }}/iFunnier_FLEX.ipa \
-               -f ${{ github.workspace }}/FLEXall.deb
+               -f ${{ github.workspace }}/FLEXall.deb ${{ github.workspace }}/libFLEX.dylib
 
       - name: Create Release
         uses: softprops/action-gh-release@v2

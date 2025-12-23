@@ -1,6 +1,6 @@
 #import <UIKit/UIKit.h>
 
-// --- SETTINGS VIEW CONTROLLER ---
+// --- SETTINGS UI ---
 @interface iFunnierSettingsViewController : UITableViewController @end
 
 @implementation iFunnierSettingsViewController
@@ -16,12 +16,15 @@
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section { return 3; }
 - (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
     UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:@"Cell" forIndexPath:indexPath];
+    cell.selectionStyle = UITableViewCellSelectionStyleNone;
+    
     UISwitch *sw = [UISwitch new];
     sw.tag = indexPath.row;
     [sw addTarget:self action:@selector(t:) forControlEvents:UIControlEventValueChanged];
     
     NSString *txt = @"";
     NSString *key = @"";
+    
     if (indexPath.row == 0) { txt = @"Block Ads"; key = @"kIFBlockAds"; }
     else if (indexPath.row == 1) { txt = @"No Watermark"; key = @"kIFNoWatermark"; }
     else if (indexPath.row == 2) { txt = @"Block Upsells"; key = @"kIFBlockUpsells"; }
@@ -34,11 +37,11 @@
 - (void)t:(UISwitch *)s {
     NSString *k = (s.tag==0)?@"kIFBlockAds":(s.tag==1)?@"kIFNoWatermark":@"kIFBlockUpsells";
     [[NSUserDefaults standardUserDefaults] setBool:s.isOn forKey:k];
+    [[NSUserDefaults standardUserDefaults] synchronize];
 }
 @end
 
 // --- MENU HOOK ---
-// Class: Menu.MenuViewController
 %group MenuHook
 
 %hook MenuViewController
@@ -46,40 +49,41 @@
 - (void)viewDidAppear:(BOOL)animated {
     %orig;
     
-    // Check if we already added the button
-    if (self.navigationItem.rightBarButtonItem && self.navigationItem.rightBarButtonItem.tag == 999) {
+    // FIX: Cast self to UIViewController so the compiler knows navigationItem exists
+    UIViewController *vc = (UIViewController *)self;
+
+    // Check if button already exists (tag 999)
+    if (vc.navigationItem.rightBarButtonItem && vc.navigationItem.rightBarButtonItem.tag == 999) {
         return;
     }
     
-    // Create a "Gear" icon button
+    // Create Gear Icon
     UIBarButtonItem *settingsBtn = [[UIBarButtonItem alloc] initWithImage:[UIImage systemImageNamed:@"gear"] 
                                                                     style:UIBarButtonItemStylePlain 
                                                                    target:self 
                                                                    action:@selector(openIFunnierSettings)];
-    settingsBtn.tag = 999; // Tag to identify our button
+    settingsBtn.tag = 999;
     
-    // Add it to the top right of the menu
-    self.navigationItem.rightBarButtonItem = settingsBtn;
+    // Inject into Navigation Bar
+    vc.navigationItem.rightBarButtonItem = settingsBtn;
 }
 
 %new
 - (void)openIFunnierSettings {
     iFunnierSettingsViewController *vc = [[iFunnierSettingsViewController alloc] initWithStyle:UITableViewStyleInsetGrouped];
     UINavigationController *nav = [[UINavigationController alloc] initWithRootViewController:vc];
-    [self presentViewController:nav animated:YES completion:nil];
+    
+    // Cast self to UIViewController to present
+    [(UIViewController *)self presentViewController:nav animated:YES completion:nil];
 }
 
 %end
 %end
 
 %ctor {
-    // Initialize the Menu Hook
-    // Class name found in FLEX: "Menu.MenuViewController"
+    // Initialize the Menu Hook for Swift Class
     Class menuClass = objc_getClass("Menu.MenuViewController");
-    
-    if (!menuClass) {
-        menuClass = objc_getClass("MenuViewController");
-    }
+    if (!menuClass) menuClass = objc_getClass("MenuViewController");
     
     if (menuClass) {
         %init(MenuHook, MenuViewController = menuClass);

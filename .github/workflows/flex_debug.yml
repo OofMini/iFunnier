@@ -1,0 +1,42 @@
+name: iFunnier Debug (FLEX)
+
+on:
+  workflow_dispatch: # Allows you to manually trigger this from the Actions tab
+
+jobs:
+  build:
+    name: Build Debug with FLEX
+    runs-on: macos-latest
+    steps:
+      - name: Checkout Source
+        uses: actions/checkout@v4
+
+      - name: Setup Theos
+        uses: actions/checkout@v4
+        with:
+          repository: theos/theos
+          path: theos
+
+      - name: Patch Tweak to Load FLEX
+        run: |
+          # This command finds the 3-finger tap gesture in your code and injects the FLEX trigger.
+          # It uses %c(FLEXManager) to avoid needing to link against the FLEX library at build time.
+          sed -i '' '/t.count == 3) {/a\
+          [[%c(FLEXManager) sharedManager] showExplorer];\
+          ' Logos/iFunnier.x
+          
+          # Print the change to the log to verify it worked
+          echo "Verifying Patch:"
+          grep -A 3 "t.count == 3" Logos/iFunnier.x
+
+      - name: Build Package
+        run: |
+          export THEOS=$PWD/theos
+          # FINALPACKAGE=0 enables debug mode
+          make package FINALPACKAGE=0
+
+      - name: Upload Debug Deb
+        uses: actions/upload-artifact@v4
+        with:
+          name: iFunnier_Debug_FLEX
+          path: packages/*.deb

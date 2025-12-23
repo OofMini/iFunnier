@@ -22,30 +22,18 @@
 
 // 2. FEATURES MANAGER
 // Class: Premium.PremiumFeaturesServiceImpl
-// This handles specific perks. We force all feature checks to return YES.
 %hook PremiumFeaturesServiceImpl
 
-- (BOOL)isFeatureEnabled:(id)arg1 {
-    return YES;
-}
-
-- (BOOL)isEnabled:(id)arg1 {
-    return YES;
-}
-
-// Fallback for simple property checks
-- (BOOL)hasPremiumFeatures {
-    return YES;
-}
+- (BOOL)isFeatureEnabled:(id)arg1 { return YES; }
+- (BOOL)isEnabled:(id)arg1 { return YES; }
+- (BOOL)hasPremiumFeatures { return YES; }
 
 %end
 
 // 3. APP ICONS (Bonus)
 // Class: Premium.PremiumAppIconsServiceImpl
 %hook PremiumAppIconsServiceImpl
-- (BOOL)canChangeAppIcon {
-    return YES; 
-}
+- (BOOL)canChangeAppIcon { return YES; }
 %end
 
 %end
@@ -66,7 +54,7 @@
 %end
 %end
 
-// --- VIDEO SAVER ---
+// --- VIDEO SAVER (Ungrouped) ---
 static NSURL *gLastPlayedURL = nil;
 
 %hook AVPlayer
@@ -78,7 +66,7 @@ static NSURL *gLastPlayedURL = nil;
 }
 %end
 
-// --- SHARE SHEET (Download Button) ---
+// --- SHARE SHEET (Ungrouped) ---
 @interface IFDownloadActivity : UIActivity @end
 @implementation IFDownloadActivity
 - (UIActivityType)activityType { return @"com.ifunnier.download"; }
@@ -109,6 +97,10 @@ static NSURL *gLastPlayedURL = nil;
 %end
 
 %ctor {
+    // FIX: Initialize the ungrouped hooks (Video Saver & Share Sheet)
+    %init; 
+    
+    // Initialize Ad Blockers
     %init(UICleaner);
     
     // --- Initialize Premium Hooks Safely ---
@@ -125,7 +117,7 @@ static NSURL *gLastPlayedURL = nil;
     Class iconsClass = objc_getClass("Premium.PremiumAppIconsServiceImpl");
     if (!iconsClass) iconsClass = objc_getClass("PremiumAppIconsServiceImpl");
 
-    // Init the group with whatever classes we found
+    // Init the group if any class is found
     if (statusClass || featuresClass) {
         %init(PremiumSpoofer, 
               PremiumStatusServiceImpl = statusClass, 

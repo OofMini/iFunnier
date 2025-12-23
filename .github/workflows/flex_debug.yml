@@ -47,11 +47,10 @@ jobs:
 
       - name: Patch Tweak to Load FLEX
         run: |
-          # Finds the call to openSettingsMenu() and replaces it with the FLEX command
-          # This ensures 3-finger tap opens FLEX instead of the standard settings
+          # 1. Finds the call to openSettingsMenu() and replaces it with the FLEX command
           sed -i '' 's/openSettingsMenu();/\[\[%c(FLEXManager) sharedManager\] showExplorer\];/' Logos/iFunnier.x
           
-          # Verify the patch applied
+          # 2. Verify the patch applied
           echo "Verifying Patch:"
           grep "FLEXManager" Logos/iFunnier.x
 
@@ -68,23 +67,29 @@ jobs:
              exit 1
           fi
 
-      - name: Download IPA
+      - name: Download Files (IPA & libFLEX)
         run: |
+          # 1. Download User IPA
           wget "${{ inputs.ipa_url }}" --no-verbose -O ${{ github.workspace }}/ifunny.ipa
 
-          # Verify File Type
+          # 2. Download libFLEX.dylib (Pre-compiled)
+          # We use a reliable source for the raw dylib
+          wget "https://github.com/oa414/libFLEX/raw/master/libFLEX.dylib" --no-verbose -O ${{ github.workspace }}/libFLEX.dylib
+
+          # Verify File Types
           file_type=$(file --mime-type -b ${{ github.workspace }}/ifunny.ipa)
           if [[ "$file_type" != "application/x-ios-app" && "$file_type" != "application/zip" && "$file_type" != "application/octet-stream" ]]; then
-            echo "::error::Validation failed: The downloaded file is not a valid IPA. Detected type: $file_type"
+            echo "::error::Validation failed: The downloaded IPA is invalid. Detected type: $file_type"
             exit 1
           fi
 
-      - name: Inject Tweak (Cyan)
+      - name: Inject Tweak & Library (Cyan)
         run: |
-          # Injecting the DEBUG deb
+          # Injecting BOTH the debug deb AND the libFLEX.dylib
+          # Cyan accepts multiple files passed to the -f flag
           cyan -i ${{ github.workspace }}/ifunny.ipa \
                -o ${{ github.workspace }}/iFunnier_Debug.ipa \
-               -f ${{ github.workspace }}/build_output/iFunnier_Debug.deb
+               -f ${{ github.workspace }}/build_output/iFunnier_Debug.deb ${{ github.workspace }}/libFLEX.dylib
 
       - name: Create Draft Release
         uses: softprops/action-gh-release@v2

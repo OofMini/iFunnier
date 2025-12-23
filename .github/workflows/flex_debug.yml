@@ -4,12 +4,12 @@ on:
   workflow_dispatch:
     inputs:
       ipa_url:
-        description: 'Direct URL to iFunny IPA'
+        description: 'Direct URL to DECRYPTED iFunny IPA'
         required: true
 
 jobs:
   inject_flex:
-    name: Inject FLEX Only
+    name: Inject FLEXall
     runs-on: macos-latest
     permissions:
       contents: write
@@ -20,38 +20,37 @@ jobs:
 
       - name: Install Dependencies
         run: |
-          # Cyan (pyzule) needs ldid for signing and python
           brew install ldid wget
           pipx install --force https://github.com/asdfzxcvbn/pyzule-rw/archive/main.zip
 
-      - name: Download Files (IPA & libFLEX)
+      - name: Download Files
         run: |
           # 1. Download User IPA
           wget "${{ inputs.ipa_url }}" --no-verbose -O ${{ github.workspace }}/ifunny.ipa
 
-          # 2. Download libFLEX.dylib
-          # Using the standard pre-compiled library
-          wget "https://github.com/oa414/libFLEX/raw/master/libFLEX.dylib" --no-verbose -O ${{ github.workspace }}/libFLEX.dylib
+          # 2. Download FLEXall (.deb)
+          # We use a known working version of FLEXall which is more stable than raw libFLEX
+          wget "https://github.com/dgh0st/FLEXall/raw/master/packages/com.dgh0st.flexall_0.0.1-24_iphoneos-arm.deb" --no-verbose -O ${{ github.workspace }}/FLEXall.deb || \
+          wget "https://github.com/NSExceptional/FLEXing/releases/download/1.2/com.pantsthief.flexing_1.2_iphoneos-arm.deb" --no-verbose -O ${{ github.workspace }}/FLEXall.deb
 
-          # Verify File Types
+          # Verify IPA
           file_type=$(file --mime-type -b ${{ github.workspace }}/ifunny.ipa)
           if [[ "$file_type" != "application/x-ios-app" && "$file_type" != "application/zip" && "$file_type" != "application/octet-stream" ]]; then
-            echo "::error::Validation failed: The downloaded IPA is invalid. Detected type: $file_type"
+            echo "::error::Validation failed: The downloaded file is not a valid IPA."
             exit 1
           fi
 
       - name: Inject FLEX (Cyan)
         run: |
-          # Injecting ONLY libFLEX.dylib. 
-          # The main 'iFunnier.deb' is intentionally excluded.
+          # Inject the .deb directly. Cyan handles extracting the dylib and merging the plist.
           cyan -i ${{ github.workspace }}/ifunny.ipa \
-               -o ${{ github.workspace }}/iFunnier_FLEX_Only.ipa \
-               -f ${{ github.workspace }}/libFLEX.dylib
+               -o ${{ github.workspace }}/iFunnier_FLEX.ipa \
+               -f ${{ github.workspace }}/FLEXall.deb
 
-      - name: Create Draft Release
+      - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: flex-debug-v${{ github.run_number }}
-          name: iFunnier FLEX (No Tweak) ${{ github.run_number }}
-          files: ${{ github.workspace }}/iFunnier_FLEX_Only.ipa
+          name: iFunnier FLEX Debug ${{ github.run_number }}
+          files: ${{ github.workspace }}/iFunnier_FLEX.ipa
           draft: true

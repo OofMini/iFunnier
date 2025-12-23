@@ -1,5 +1,4 @@
 #import <UIKit/UIKit.h>
-#import <AVFoundation/AVFoundation.h>
 
 // --- PREFERENCES ---
 #define kIFBlockAds @"kIFBlockAds"
@@ -15,39 +14,52 @@
 - (BOOL)isActive { return YES; }
 %end
 
-// 2. FEATURES MANAGER
+// 2. FEATURES MANAGER (Fixed based on your screenshot!)
 // Class: Premium.PremiumFeaturesServiceImpl
 %hook PremiumFeaturesServiceImpl
-- (BOOL)isFeatureEnabled:(id)arg1 { return YES; }
-- (BOOL)isEnabled:(id)arg1 { return YES; }
-- (BOOL)hasPremiumFeatures { return YES; }
+
+// The generic "Is the service on?" check
+- (BOOL)isEnabled { return YES; }
+
+// The SPECIFIC feature checks found in your screenshot
+- (BOOL)isFeatureAvailable:(NSInteger)feature forPlan:(NSInteger)plan { 
+    return YES; 
+}
+
+- (BOOL)isFeatureAvailableForAnyPlan:(NSInteger)feature { 
+    return YES; 
+}
+
+- (BOOL)isEntryPointEnabled:(NSInteger)entryPoint { 
+    return YES; 
+}
+
 %end
 
-// 3. APP ICONS
+// 3. PURCHASE MANAGER (Safety Net)
+// Class: Premium.PremiumPurchaseManagerImpl
+%hook PremiumPurchaseManagerImpl
+- (BOOL)hasActiveSubscription { return YES; }
+- (BOOL)isSubscriptionActive { return YES; }
+- (id)activeSubscription { return [NSObject new]; }
+%end
+
+// 4. APP ICONS
 // Class: Premium.PremiumAppIconsServiceImpl
 %hook PremiumAppIconsServiceImpl
 - (BOOL)canChangeAppIcon { return YES; }
 - (BOOL)isAppIconChangeEnabled { return YES; }
 %end
 
-// 4. VIDEO SAVING (Native)
-// Class: Premium.VideoSaveEnableServiceImpl
-%hook VideoSaveEnableServiceImpl
-- (BOOL)isEnabled { return YES; }
-- (BOOL)isVideoSaveEnabled { return YES; }
-- (BOOL)canSaveVideo { return YES; }
-%end
-
-// 5. VERIFICATION (Safety Net)
-// Class: Premium.PremiumVerificationServiceImpl
-%hook PremiumVerificationServiceImpl
-- (BOOL)isVerified { return YES; }
-- (BOOL)hasValidReceipt { return YES; }
+// 5. USER MODEL (Backup)
+%hook FNUser
+- (BOOL)isPro { return YES; }
+- (BOOL)isPremium { return YES; }
 %end
 
 %end
 
-// --- AD BLOCKING (SDK Removal) ---
+// --- AD BLOCKERS & CLEANUP ---
 %group UICleaner
 %hook ALAdService
 - (void)loadNextAd:(id)a andNotify:(id)b { }
@@ -63,7 +75,7 @@
 %end
 %end
 
-// --- CUSTOM VIDEO SAVER (Backup Strategy) ---
+// --- VIDEO SAVER & SHARE SHEET ---
 static NSURL *gLastPlayedURL = nil;
 
 %hook AVPlayer
@@ -75,7 +87,6 @@ static NSURL *gLastPlayedURL = nil;
 }
 %end
 
-// --- SHARE SHEET (Download Button) ---
 @interface IFDownloadActivity : UIActivity @end
 @implementation IFDownloadActivity
 - (UIActivityType)activityType { return @"com.ifunnier.download"; }
@@ -106,40 +117,35 @@ static NSURL *gLastPlayedURL = nil;
 %end
 
 %ctor {
-    // 1. Initialize Ungrouped Hooks (Video Saver & Share Sheet)
+    // 1. Initialize Ungrouped Hooks (Video Saver)
     %init;
-    
+
     // 2. Initialize Ad Blockers
     %init(UICleaner);
     
-    // 3. Initialize Premium Hooks Dynamically
-    
-    // Find Classes
+    // 3. Initialize Premium Hooks
     Class statusClass = objc_getClass("Premium.PremiumStatusServiceImpl");
     if (!statusClass) statusClass = objc_getClass("PremiumStatusServiceImpl");
-    
+
     Class featuresClass = objc_getClass("Premium.PremiumFeaturesServiceImpl");
     if (!featuresClass) featuresClass = objc_getClass("PremiumFeaturesServiceImpl");
-    
-    Class iconsClass = objc_getClass("Premium.AppIconsServiceImpl"); // Fixed Typo
-    if (!iconsClass) iconsClass = objc_getClass("Premium.PremiumAppIconsServiceImpl");
+
+    Class purchaseClass = objc_getClass("Premium.PremiumPurchaseManagerImpl");
+    if (!purchaseClass) purchaseClass = objc_getClass("PremiumPurchaseManagerImpl");
+
+    Class iconsClass = objc_getClass("Premium.PremiumAppIconsServiceImpl");
     if (!iconsClass) iconsClass = objc_getClass("PremiumAppIconsServiceImpl");
+    
+    Class userClass = objc_getClass("FNUser");
+    if (!userClass) userClass = objc_getClass("iFunnyUser");
 
-    Class videoSaveClass = objc_getClass("Premium.VideoSaveEnableServiceImpl");
-    if (!videoSaveClass) videoSaveClass = objc_getClass("VideoSaveEnableServiceImpl");
-
-    Class verifyClass = objc_getClass("Premium.PremiumVerificationServiceImpl");
-    if (!verifyClass) verifyClass = objc_getClass("PremiumVerificationServiceImpl");
-
-    // Init Group
-    // We pass whatever classes we found. If a class is nil, that specific hook just won't run, preventing crashes.
     if (statusClass) {
         %init(PremiumSpoofer, 
               PremiumStatusServiceImpl = statusClass,
               PremiumFeaturesServiceImpl = featuresClass,
+              PremiumPurchaseManagerImpl = purchaseClass,
               PremiumAppIconsServiceImpl = iconsClass,
-              VideoSaveEnableServiceImpl = videoSaveClass,
-              PremiumVerificationServiceImpl = verifyClass);
+              FNUser = userClass);
     }
     
     // Set Default Preferences

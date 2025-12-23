@@ -225,6 +225,32 @@ BOOL cellHasNastyContent(UIView *v, int depth) {
 %end
 %end
 
+// --- PREMIUM SPOOFER (NEW) ---
+// Tricks the app into thinking we have premium to disable internal ad logic
+%group PremiumSpoofer
+
+// Common class names for iFunny User Model
+// Note: If these specific class names don't exist in your version, this part just won't run.
+// You can find the exact names using FLEX if needed.
+
+%hook FNUser
+- (BOOL)isPro { return ads() ? YES : %orig; }
+- (BOOL)isPremium { return ads() ? YES : %orig; }
+- (BOOL)isSubscriptionEnabled { return ads() ? YES : %orig; }
+%end
+
+%hook FNUserProfile
+- (BOOL)isPro { return ads() ? YES : %orig; }
+- (BOOL)isPremium { return ads() ? YES : %orig; }
+%end
+
+%hook FNUserManager
+- (BOOL)isUserPro { return ads() ? YES : %orig; }
+- (BOOL)hasPremium { return ads() ? YES : %orig; }
+%end
+
+%end
+
 // --- VIDEO SNIFFER ---
 %hook AVPlayer
 - (void)replaceCurrentItemWithPlayerItem:(AVPlayerItem *)item {
@@ -283,6 +309,12 @@ void downloadLastVideo() {
     %init(AdBlockers);
     %init(UICleaner);
     %init(UpsellBlockers);
+    
+    // Attempt to init the spoofer.
+    // Use %init(Group, Class=RealClass) if you find the real class names are different.
+    // For now, we try the standard names.
+    @try { %init(PremiumSpoofer); } @catch(NSException *e) {}
+    
     NSUserDefaults *d = [NSUserDefaults standardUserDefaults];
     if (![d objectForKey:kIFBlockAds]) [d setBool:YES forKey:kIFBlockAds];
     if (![d objectForKey:kIFBlockUpsells]) [d setBool:YES forKey:kIFBlockUpsells];

@@ -1,23 +1,6 @@
 #import <UIKit/UIKit.h>
 #import <AVFoundation/AVFoundation.h>
-
-// --- BUILD FIX: Manual Declarations ---
-// This prevents "Unknown type" errors if the SDK fails to load AVFoundation headers
-@interface AVAsset : NSObject
-@end
-
-@interface AVURLAsset : AVAsset
-@property (nonatomic, copy, readonly) NSURL *URL;
-@end
-
-@interface AVPlayerItem : NSObject
-@property (nonatomic, readonly) AVAsset *asset;
-@end
-
-@interface AVPlayer : NSObject
-- (void)replaceCurrentItemWithPlayerItem:(AVPlayerItem *)item;
-@end
-// --------------------------------------
+#import <objc/runtime.h>
 
 // --- PREFERENCES ---
 #define kIFBlockAds @"kIFBlockAds"
@@ -28,13 +11,11 @@
 %group PremiumSpoofer
 
 // 1. MASTER SWITCH
-// Class: Premium.PremiumStatusServiceImpl
 %hook PremiumStatusServiceImpl
 - (BOOL)isActive { return YES; }
 %end
 
-// 2. FEATURES MANAGER
-// Class: Premium.PremiumFeaturesServiceImpl
+// 2. FEATURES MANAGER (Methods from your screenshot)
 %hook PremiumFeaturesServiceImpl
 - (BOOL)isEnabled { return YES; }
 - (BOOL)isFeatureAvailable:(NSInteger)feature forPlan:(NSInteger)plan { return YES; }
@@ -43,7 +24,6 @@
 %end
 
 // 3. PURCHASE MANAGER
-// Class: Premium.PremiumPurchaseManagerImpl
 %hook PremiumPurchaseManagerImpl
 - (BOOL)hasActiveSubscription { return YES; }
 - (BOOL)isSubscriptionActive { return YES; }
@@ -51,7 +31,6 @@
 %end
 
 // 4. APP ICONS
-// Class: Premium.PremiumAppIconsServiceImpl
 %hook PremiumAppIconsServiceImpl
 - (BOOL)canChangeAppIcon { return YES; }
 - (BOOL)isAppIconChangeEnabled { return YES; }
@@ -84,14 +63,24 @@
 // --- VIDEO SAVER & SHARE SHEET ---
 static NSURL *gLastPlayedURL = nil;
 
+// DYNAMIC HOOK: We hook AVPlayer by name to avoid header issues
 %hook AVPlayer
-// We use (id)item to bypass strict type checking, then cast it inside
+
+// Use (id) to accept any object, preventing "Unknown Type" errors
 - (void)replaceCurrentItemWithPlayerItem:(id)item {
     %orig;
+    
+    // Runtime check: Does this object have an 'asset' property?
     if (item && [item respondsToSelector:@selector(asset)]) {
-        AVAsset *asset = [item asset];
-        if ([asset isKindOfClass:objc_getClass("AVURLAsset")]) {
-            gLastPlayedURL = [(AVURLAsset *)asset URL];
+        id asset = [item performSelector:@selector(asset)];
+        
+        // Runtime check: Is the asset an AVURLAsset?
+        // We look up the class by string to avoid linker errors
+        Class urlAssetClass = objc_getClass("AVURLAsset");
+        if (asset && urlAssetClass && [asset isKindOfClass:urlAssetClass]) {
+            if ([asset respondsToSelector:@selector(URL)]) {
+                gLastPlayedURL = [asset performSelector:@selector(URL)];
+            }
         }
     }
 }

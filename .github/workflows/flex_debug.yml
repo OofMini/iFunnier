@@ -1,42 +1,95 @@
 name: iFunnier Debug (FLEX)
 
 on:
-  workflow_dispatch: # Allows you to manually trigger this from the Actions tab
+  workflow_dispatch:
+    inputs:
+      ipa_url:
+        description: 'Direct URL to iFunny IPA'
+        required: true
 
 jobs:
   build:
-    name: Build Debug with FLEX
+    name: Build and Inject (Debug)
     runs-on: macos-latest
+    permissions:
+      contents: write
+
+    env:
+      THEOS: ${{ github.workspace }}/theos
+
     steps:
-      - name: Checkout Source
+      - name: Checkout Repo
         uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Dependencies
+        run: |
+          brew install make ldid dpkg wget
+          pipx install --force https://github.com/asdfzxcvbn/pyzule-rw/archive/main.zip
 
       - name: Setup Theos
         uses: actions/checkout@v4
         with:
           repository: theos/theos
           path: theos
+          submodules: recursive
+          ref: master
+
+      - name: Setup iOS SDK
+        run: |
+          git clone --quiet -n --depth=1 --filter=tree:0 https://github.com/theos/sdks/
+          cd sdks
+          git sparse-checkout set --no-cone iPhoneOS14.5.sdk
+          git checkout
+          mkdir -p $THEOS/sdks
+          mv *.sdk $THEOS/sdks/
 
       - name: Patch Tweak to Load FLEX
         run: |
-          # This command finds the 3-finger tap gesture in your code and injects the FLEX trigger.
-          # It uses %c(FLEXManager) to avoid needing to link against the FLEX library at build time.
-          sed -i '' '/t.count == 3) {/a\
-          [[%c(FLEXManager) sharedManager] showExplorer];\
-          ' Logos/iFunnier.x
+          # Finds the call to openSettingsMenu() and replaces it with the FLEX command
+          # This ensures 3-finger tap opens FLEX instead of the standard settings
+          sed -i '' 's/openSettingsMenu();/\[\[%c(FLEXManager) sharedManager\] showExplorer\];/' Logos/iFunnier.x
           
-          # Print the change to the log to verify it worked
+          # Verify the patch applied
           echo "Verifying Patch:"
-          grep -A 3 "t.count == 3" Logos/iFunnier.x
+          grep "FLEXManager" Logos/iFunnier.x
 
-      - name: Build Package
+      - name: Build Tweak (Debug)
         run: |
-          export THEOS=$PWD/theos
-          # FINALPACKAGE=0 enables debug mode
-          make package FINALPACKAGE=0
+          # DEBUG=1 and FINALPACKAGE=0 ensures debug symbols are kept
+          make package DEBUG=1 FINALPACKAGE=0
+          
+          mkdir -p ${{ github.workspace }}/build_output
+          mv packages/*.deb ${{ github.workspace }}/build_output/iFunnier_Debug.deb
+          
+          if [ ! -f ${{ github.workspace }}/build_output/iFunnier_Debug.deb ]; then
+             echo "::error::Build failed! No .deb file found."
+             exit 1
+          fi
 
-      - name: Upload Debug Deb
-        uses: actions/upload-artifact@v4
+      - name: Download IPA
+        run: |
+          wget "${{ inputs.ipa_url }}" --no-verbose -O ${{ github.workspace }}/ifunny.ipa
+
+          # Verify File Type
+          file_type=$(file --mime-type -b ${{ github.workspace }}/ifunny.ipa)
+          if [[ "$file_type" != "application/x-ios-app" && "$file_type" != "application/zip" && "$file_type" != "application/octet-stream" ]]; then
+            echo "::error::Validation failed: The downloaded file is not a valid IPA. Detected type: $file_type"
+            exit 1
+          fi
+
+      - name: Inject Tweak (Cyan)
+        run: |
+          # Injecting the DEBUG deb
+          cyan -i ${{ github.workspace }}/ifunny.ipa \
+               -o ${{ github.workspace }}/iFunnier_Debug.ipa \
+               -f ${{ github.workspace }}/build_output/iFunnier_Debug.deb
+
+      - name: Create Draft Release
+        uses: softprops/action-gh-release@v2
         with:
-          name: iFunnier_Debug_FLEX
-          path: packages/*.deb
+          tag_name: debug-v${{ github.run_number }}
+          name: iFunnier Debug Build ${{ github.run_number }}
+          files: ${{ github.workspace }}/iFunnier_Debug.ipa
+          draft: true

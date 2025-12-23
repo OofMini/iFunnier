@@ -34,7 +34,7 @@ void nuke(UIView *v) {
     v.hidden = YES;
     v.alpha = 0;
     v.userInteractionEnabled = NO;
-    v.backgroundColor = [UIColor clearColor]; // FIX: Removes "Black Box"
+    v.backgroundColor = [UIColor clearColor];
     v.clipsToBounds = YES;
     
     // Collapse frame
@@ -44,10 +44,9 @@ void nuke(UIView *v) {
     v.frame = f;
 }
 
-// Recursive scanner to find "Bad Words" deep inside a view
-BOOL scanForNastyWords(UIView *v, int depth) {
-    if (depth > 8) return NO; // Performance limit
-    
+// NON-RECURSIVE Scanner (Safe for Main Views)
+// Only checks the view itself, NOT its children.
+BOOL isViewNasty(UIView *v) {
     // 1. Text Labels
     if ([v isKindOfClass:[UILabel class]]) {
         NSString *t = ((UILabel *)v).text ?: @"";
@@ -80,16 +79,23 @@ BOOL scanForNastyWords(UIView *v, int depth) {
             return YES;
         }
     }
-
-    // Recurse
-    for (UIView *sub in v.subviews) {
-        if (scanForNastyWords(sub, depth + 1)) return YES;
-    }
-    
     return NO;
 }
 
-// HOOK 1: Universal View Scanner
+// RECURSIVE Scanner (Aggressive for Cells)
+// Looks deep inside to find ads hidden in posts
+BOOL cellHasNastyContent(UIView *v, int depth) {
+    if (depth > 8) return NO;
+    
+    if (isViewNasty(v)) return YES;
+
+    for (UIView *sub in v.subviews) {
+        if (cellHasNastyContent(sub, depth + 1)) return YES;
+    }
+    return NO;
+}
+
+// HOOK 1: Universal View Scanner (SAFE MODE)
 %hook UIView
 - (void)layoutSubviews {
     %orig;
@@ -100,7 +106,6 @@ BOOL scanForNastyWords(UIView *v, int depth) {
     CGFloat screenH = [UIScreen mainScreen].bounds.size.height;
     if (self.frame.origin.y > (screenH - 150) && self.frame.origin.x > (screenW - 100)) {
         if (self.frame.size.width < 100 && self.frame.size.height < 100) {
-            // If it's a button or label floating in the corner, kill it
             if ([self isKindOfClass:[UIButton class]] || [self isKindOfClass:[UILabel class]]) {
                 if (![self.superview isKindOfClass:[UITabBar class]]) {
                     nuke(self);
@@ -110,29 +115,28 @@ BOOL scanForNastyWords(UIView *v, int depth) {
         }
     }
 
-    // B. Bottom Bar Vacuum (Fix Gray/Black Bars)
+    // B. Bottom Bar Vacuum
     if (self.frame.origin.y >= (screenH - 100)) {
         NSString *cls = NSStringFromClass([self class]);
         if ([self isKindOfClass:[UITabBar class]] || [cls containsString:@"TabBar"] || [cls containsString:@"Input"]) return;
 
-        // If it's a "Banner" or "Ad" view
         if ([cls containsString:@"Banner"] || [cls containsString:@"Ad"] || [cls containsString:@"Pub"]) {
             nuke(self);
             return;
         }
         
-        // If it's that generic empty container
+        // Empty containers
         if ((self.frame.size.height >= 49 && self.frame.size.height <= 51) || 
             (self.frame.size.height >= 89 && self.frame.size.height <= 95)) {
             if (self.subviews.count == 0) nuke(self);
-            else self.backgroundColor = [UIColor clearColor]; // Make transparent
+            else self.backgroundColor = [UIColor clearColor];
         }
     }
 
-    // C. Text Scan
-    if (scanForNastyWords(self, 0)) {
+    // C. Safe Text Scan (NO RECURSION)
+    if (isViewNasty(self)) {
         nuke(self);
-        // If it's small, nuke parent too (removes container)
+        // Only nuke parent if it is a small container (button wrapper), NOT a full screen
         if (self.superview && self.superview.frame.size.height < 200) {
             nuke(self.superview);
         }
@@ -140,12 +144,14 @@ BOOL scanForNastyWords(UIView *v, int depth) {
 }
 %end
 
-// HOOK 2: Cell Cleaner (Fixes Swiping Ads)
+// HOOK 2: Cell Cleaner (AGGRESSIVE MODE)
 %hook UICollectionViewCell
 - (void)layoutSubviews {
     %orig;
     if (ads()) {
-        if (scanForNastyWords(self, 0)) {
+        // Here we use the recursive scanner because we WANT to kill the whole cell
+        // if it contains a tiny ad label.
+        if (cellHasNastyContent(self, 0)) {
             nuke(self);
             nuke(self.contentView);
         }
@@ -153,18 +159,18 @@ BOOL scanForNastyWords(UIView *v, int depth) {
 }
 %end
 
-// HOOK 3: Alert Cleaner (Fixes "Something went wrong")
+// HOOK 3: Alert Cleaner
 %hook UIAlertController
 - (void)viewDidLoad {
     %orig;
     if (ads()) {
         NSString *t = self.title ?: @"";
         NSString *m = self.message ?: @"";
-        // Block Error alerts AND Notification requests
+        
+        // Removed "notifications" from block list to let system prompts pass
         if ([t localizedCaseInsensitiveContainsString:@"wrong"] || 
             [m localizedCaseInsensitiveContainsString:@"wrong"] ||
             [t localizedCaseInsensitiveContainsString:@"error"] ||
-            [t localizedCaseInsensitiveContainsString:@"notifications"] || // Block Notification Prompt
             [t localizedCaseInsensitiveContainsString:@"oops"]) {
             
             self.view.hidden = YES;
@@ -185,12 +191,12 @@ BOOL scanForNastyWords(UIView *v, int depth) {
 - (void)presentViewController:(UIViewController *)vc animated:(BOOL)flag completion:(void (^)(void))completion {
     if (en(kIFBlockUpsells)) {
         NSString *name = NSStringFromClass([vc class]);
-        // Block Premium, Offers, and Notification Prompts
+        
+        // Removed "Notification" blocking to prevent black screens on startup flow
         if ([name localizedCaseInsensitiveContainsString:@"Premium"] || 
             [name localizedCaseInsensitiveContainsString:@"Subscription"] || 
             [name localizedCaseInsensitiveContainsString:@"Upsell"] ||
-            [name localizedCaseInsensitiveContainsString:@"Offer"] ||
-            [name localizedCaseInsensitiveContainsString:@"Notification"]) {
+            [name localizedCaseInsensitiveContainsString:@"Offer"]) {
             
             if (completion) completion(); 
             return;
@@ -199,7 +205,6 @@ BOOL scanForNastyWords(UIView *v, int depth) {
     %orig;
 }
 
-// Ghost Mode for View Controllers
 - (void)viewDidLoad {
     %orig;
     if (en(kIFBlockUpsells)) {
@@ -222,7 +227,6 @@ BOOL scanForNastyWords(UIView *v, int depth) {
             [name localizedCaseInsensitiveContainsString:@"Subscription"] || 
             [name localizedCaseInsensitiveContainsString:@"Upsell"]) {
             
-            // Safe dismiss
             dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.1 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
                 [self dismissViewControllerAnimated:NO completion:nil];
             });
@@ -232,7 +236,7 @@ BOOL scanForNastyWords(UIView *v, int depth) {
 %end
 %end
 
-// --- AD SDK LOBOTOMY (No Network Hooks) ---
+// --- AD SDK LOBOTOMY ---
 %group AdBlockers
 %hook ALAdService
 - (void)loadNextAd:(id)a andNotify:(id)b { if(ads()) return; %orig; }

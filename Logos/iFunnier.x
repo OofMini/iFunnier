@@ -11,11 +11,13 @@
 %group PremiumSpoofer
 
 // 1. MASTER SWITCH
+// Class: Premium.PremiumStatusServiceImpl
 %hook PremiumStatusServiceImpl
 - (BOOL)isActive { return YES; }
 %end
 
-// 2. FEATURES MANAGER (Methods from your screenshot)
+// 2. FEATURES MANAGER (From your screenshots)
+// Class: Premium.PremiumFeaturesServiceImpl
 %hook PremiumFeaturesServiceImpl
 - (BOOL)isEnabled { return YES; }
 - (BOOL)isFeatureAvailable:(NSInteger)feature forPlan:(NSInteger)plan { return YES; }
@@ -23,20 +25,31 @@
 - (BOOL)isEntryPointEnabled:(NSInteger)entryPoint { return YES; }
 %end
 
-// 3. PURCHASE MANAGER
+// 3. VIDEO SAVING SERVICE (The Fix for your Paywall)
+// Class: Premium.VideoSaveEnableServiceImpl
+%hook VideoSaveEnableServiceImpl
+- (BOOL)isEnabled { return YES; }
+- (BOOL)isVideoSaveEnabled { return YES; }
+- (BOOL)canSaveVideo { return YES; }
+- (BOOL)shouldShowUpsell { return NO; } // Block the paywall explicitly
+%end
+
+// 4. PURCHASE MANAGER (Safety Net)
+// Class: Premium.PremiumPurchaseManagerImpl
 %hook PremiumPurchaseManagerImpl
 - (BOOL)hasActiveSubscription { return YES; }
 - (BOOL)isSubscriptionActive { return YES; }
 - (id)activeSubscription { return [NSObject new]; }
 %end
 
-// 4. APP ICONS
+// 5. APP ICONS
+// Class: Premium.PremiumAppIconsServiceImpl
 %hook PremiumAppIconsServiceImpl
 - (BOOL)canChangeAppIcon { return YES; }
 - (BOOL)isAppIconChangeEnabled { return YES; }
 %end
 
-// 5. USER MODEL
+// 6. USER MODEL
 %hook FNUser
 - (BOOL)isPro { return YES; }
 - (BOOL)isPremium { return YES; }
@@ -135,15 +148,21 @@ static NSURL *gLastPlayedURL = nil;
     Class iconsClass = objc_getClass("Premium.PremiumAppIconsServiceImpl");
     if (!iconsClass) iconsClass = objc_getClass("PremiumAppIconsServiceImpl");
     
+    // THE FIX: Add Video Saver Service back
+    Class videoSaveClass = objc_getClass("Premium.VideoSaveEnableServiceImpl");
+    if (!videoSaveClass) videoSaveClass = objc_getClass("VideoSaveEnableServiceImpl");
+    
     Class userClass = objc_getClass("FNUser");
     if (!userClass) userClass = objc_getClass("iFunnyUser");
 
+    // Init the group safely
     if (statusClass) {
         %init(PremiumSpoofer, 
               PremiumStatusServiceImpl = statusClass,
               PremiumFeaturesServiceImpl = featuresClass,
               PremiumPurchaseManagerImpl = purchaseClass,
               PremiumAppIconsServiceImpl = iconsClass,
+              VideoSaveEnableServiceImpl = videoSaveClass,
               FNUser = userClass);
     }
     

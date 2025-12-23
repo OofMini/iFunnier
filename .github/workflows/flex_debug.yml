@@ -45,14 +45,16 @@ jobs:
           mkdir -p $THEOS/sdks
           mv *.sdk $THEOS/sdks/
 
-      - name: Patch Tweak to Load FLEX
+      - name: Patch Sidebar Button to Load FLEX
         run: |
-          # 1. Finds the call to openSettingsMenu() and replaces it with the FLEX command
-          sed -i '' 's/openSettingsMenu();/\[\[%c(FLEXManager) sharedManager\] showExplorer\];/' Logos/iFunnier.x
+          # We look for the line in Logos/IFunnierSettings.x that detects the button press.
+          # We inject the FLEX command immediately after the opening brace '{'.
+          # This makes the "iFunnier" sidebar button open FLEX instead of the settings menu.
+          sed -i '' '/selectedItem.type == kIFunnierSettingsTag) {/s/{/{ \[\[%c(FLEXManager) sharedManager\] showExplorer\]; return;/' Logos/IFunnierSettings.x
           
-          # 2. Verify the patch applied
+          # Verify the patch applied
           echo "Verifying Patch:"
-          grep "FLEXManager" Logos/iFunnier.x
+          grep "FLEXManager" Logos/IFunnierSettings.x
 
       - name: Build Tweak (Debug)
         run: |
@@ -73,7 +75,6 @@ jobs:
           wget "${{ inputs.ipa_url }}" --no-verbose -O ${{ github.workspace }}/ifunny.ipa
 
           # 2. Download libFLEX.dylib (Pre-compiled)
-          # We use a reliable source for the raw dylib
           wget "https://github.com/oa414/libFLEX/raw/master/libFLEX.dylib" --no-verbose -O ${{ github.workspace }}/libFLEX.dylib
 
           # Verify File Types
@@ -86,7 +87,6 @@ jobs:
       - name: Inject Tweak & Library (Cyan)
         run: |
           # Injecting BOTH the debug deb AND the libFLEX.dylib
-          # Cyan accepts multiple files passed to the -f flag
           cyan -i ${{ github.workspace }}/ifunny.ipa \
                -o ${{ github.workspace }}/iFunnier_Debug.ipa \
                -f ${{ github.workspace }}/build_output/iFunnier_Debug.deb ${{ github.workspace }}/libFLEX.dylib

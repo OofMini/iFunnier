@@ -1,4 +1,23 @@
 #import <UIKit/UIKit.h>
+#import <AVFoundation/AVFoundation.h>
+
+// --- BUILD FIX: Manual Declarations ---
+// This prevents "Unknown type" errors if the SDK fails to load AVFoundation headers
+@interface AVAsset : NSObject
+@end
+
+@interface AVURLAsset : AVAsset
+@property (nonatomic, copy, readonly) NSURL *URL;
+@end
+
+@interface AVPlayerItem : NSObject
+@property (nonatomic, readonly) AVAsset *asset;
+@end
+
+@interface AVPlayer : NSObject
+- (void)replaceCurrentItemWithPlayerItem:(AVPlayerItem *)item;
+@end
+// --------------------------------------
 
 // --- PREFERENCES ---
 #define kIFBlockAds @"kIFBlockAds"
@@ -14,29 +33,16 @@
 - (BOOL)isActive { return YES; }
 %end
 
-// 2. FEATURES MANAGER (Fixed based on your screenshot!)
+// 2. FEATURES MANAGER
 // Class: Premium.PremiumFeaturesServiceImpl
 %hook PremiumFeaturesServiceImpl
-
-// The generic "Is the service on?" check
 - (BOOL)isEnabled { return YES; }
-
-// The SPECIFIC feature checks found in your screenshot
-- (BOOL)isFeatureAvailable:(NSInteger)feature forPlan:(NSInteger)plan { 
-    return YES; 
-}
-
-- (BOOL)isFeatureAvailableForAnyPlan:(NSInteger)feature { 
-    return YES; 
-}
-
-- (BOOL)isEntryPointEnabled:(NSInteger)entryPoint { 
-    return YES; 
-}
-
+- (BOOL)isFeatureAvailable:(NSInteger)feature forPlan:(NSInteger)plan { return YES; }
+- (BOOL)isFeatureAvailableForAnyPlan:(NSInteger)feature { return YES; }
+- (BOOL)isEntryPointEnabled:(NSInteger)entryPoint { return YES; }
 %end
 
-// 3. PURCHASE MANAGER (Safety Net)
+// 3. PURCHASE MANAGER
 // Class: Premium.PremiumPurchaseManagerImpl
 %hook PremiumPurchaseManagerImpl
 - (BOOL)hasActiveSubscription { return YES; }
@@ -51,7 +57,7 @@
 - (BOOL)isAppIconChangeEnabled { return YES; }
 %end
 
-// 5. USER MODEL (Backup)
+// 5. USER MODEL
 %hook FNUser
 - (BOOL)isPro { return YES; }
 - (BOOL)isPremium { return YES; }
@@ -79,10 +85,14 @@
 static NSURL *gLastPlayedURL = nil;
 
 %hook AVPlayer
-- (void)replaceCurrentItemWithPlayerItem:(AVPlayerItem *)item {
+// We use (id)item to bypass strict type checking, then cast it inside
+- (void)replaceCurrentItemWithPlayerItem:(id)item {
     %orig;
-    if (item && [item.asset isKindOfClass:[AVURLAsset class]]) {
-        gLastPlayedURL = [(AVURLAsset *)item.asset URL];
+    if (item && [item respondsToSelector:@selector(asset)]) {
+        AVAsset *asset = [item asset];
+        if ([asset isKindOfClass:objc_getClass("AVURLAsset")]) {
+            gLastPlayedURL = [(AVURLAsset *)asset URL];
+        }
     }
 }
 %end

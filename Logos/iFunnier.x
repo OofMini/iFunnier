@@ -12,7 +12,7 @@
 static BOOL gHooksInitialized = NO;
 
 // ==========================================================
-// 1. SETTINGS MENU UI (Merged)
+// 1. SETTINGS MENU UI (Optimized with Alert)
 // ==========================================================
 @interface iFunnierSettingsViewController : UITableViewController @end
 
@@ -50,6 +50,13 @@ static BOOL gHooksInitialized = NO;
     NSString *k = (s.tag==0)?@"kIFBlockAds":(s.tag==1)?@"kIFNoWatermark":@"kIFBlockUpsells";
     [[NSUserDefaults standardUserDefaults] setBool:s.isOn forKey:k];
     [[NSUserDefaults standardUserDefaults] synchronize];
+    
+    // UX Optimization: Alert user that restart is required
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Restart Required" 
+                                                                   message:@"Please close and reopen iFunny for changes to take effect." 
+                                                            preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
+    [self presentViewController:alert animated:YES completion:nil];
 }
 @end
 
@@ -134,16 +141,16 @@ static BOOL gHooksInitialized = NO;
 %end
 
 // ==========================================================
-// 8. NUCLEAR AD BLOCKER (Optimized)
+// 8. NUCLEAR AD BLOCKER (Final Polish)
 // ==========================================================
 %group AdBlocker
 
-// AppLovin (Legacy)
+// --- AppLovin (Legacy) ---
 %hook ALAdService
 - (void)loadNextAd:(id)a andNotify:(id)b { }
 %end
 
-// AppLovin MAX (Modern)
+// --- AppLovin MAX (Modern) ---
 %hook MARequestManager
 - (void)loadAdWithAdUnitIdentifier:(id)id { }
 %end
@@ -151,20 +158,28 @@ static BOOL gHooksInitialized = NO;
 - (void)loadAd:(id)ad { }
 %end
 
-// Google AdMob
+// --- Google AdMob ---
 %hook GADBannerView
 - (void)loadRequest:(id)arg1 { }
 %end
 %hook GADInterstitialAd
 - (void)presentFromRootViewController:(id)arg1 { }
 %end
+// Added: Block AdMob Initialization
+%hook GADMobileAds
+- (void)startWithCompletionHandler:(id)arg1 { }
+%end
 
-// IronSource
+// --- IronSource ---
 %hook ISNativeAd
 - (void)loadAd { }
 %end
+// Added: Block IronSource Initialization
+%hook IronSource
++ (void)initWithAppKey:(id)arg1 { }
+%end
 
-// Pangle (TikTok Ads) - ADDED BACK
+// --- Pangle (TikTok) ---
 %hook PAGBannerAd
 - (void)loadAd:(id)a { }
 %end
@@ -236,7 +251,7 @@ static NSURL *gLastPlayedURL = nil;
     if (gHooksInitialized) return;
     gHooksInitialized = YES;
 
-    // 1. Ads
+    // 1. Ads (If Enabled)
     if ([[NSUserDefaults standardUserDefaults] boolForKey:kIFBlockAds]) {
         %init(AdBlocker);
     }
@@ -265,7 +280,7 @@ static NSURL *gLastPlayedURL = nil;
     if (!iconsCls) iconsCls = objc_getClass("PremiumAppIconsServiceImpl");
     if (iconsCls) %init(IconsHook, PremiumAppIconsServiceImpl = iconsCls);
 
-    // 4. Settings Menu (FIXED: Now initializes lazily)
+    // 4. Settings Menu
     Class menuCls = objc_getClass("Menu.MenuViewController");
     if (!menuCls) menuCls = objc_getClass("MenuViewController");
     if (menuCls) %init(MenuHook, MenuViewController = menuCls);

@@ -271,7 +271,7 @@ static Class FindSwiftClass(NSString *name) {
 %end
 
 // ==========================================================
-// 7. POPUP & AD KILLERS (Split for safety)
+// 7. POPUP & AD KILLERS
 // ==========================================================
 %group PopupKiller_Message
 %hook InAppMessageService
@@ -457,7 +457,21 @@ static Class FindSwiftClass(NSString *name) {
 %end
 
 // ==========================================================
-// 13. GHOST HOOK
+// 13. REMOTE CONFIG HOOK (The Missing Piece)
+// ==========================================================
+%group RemoteConfigHook
+%hook FIRRemoteConfig
+- (id)configValueForKey:(NSString *)key {
+    if ([key containsString:@"premium"] || [key containsString:@"video"] || [key containsString:@"save"]) {
+        return [NSNumber numberWithBool:YES];
+    }
+    return %orig;
+}
+%end
+%end
+
+// ==========================================================
+// 14. GHOST HOOK
 // ==========================================================
 %group GhostClassHook
 %hook NSObject

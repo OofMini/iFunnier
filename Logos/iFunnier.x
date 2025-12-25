@@ -9,6 +9,15 @@
 #define kIFBlockUpsells @"kIFBlockUpsells"
 #define kIFNoWatermark @"kIFNoWatermark"
 
+// --- LOGGING MACROS ---
+#ifdef DEBUG
+#define IFLog(fmt, ...) NSLog(@"[iFunnier] " fmt, ##__VA_ARGS__)
+#else
+#define IFLog(fmt, ...) // Disabled in release
+#endif
+
+// --- THREAD SAFETY ---
+static NSLock *gURLLock = nil;
 static NSURL *gLastPlayedURL = nil;
 
 // ==========================================================
@@ -21,16 +30,26 @@ static NSURL *gLastPlayedURL = nil;
 - (UIImage *)activityImage { return [UIImage systemImageNamed:@"arrow.down.circle.fill"]; }
 - (BOOL)canPerformWithActivityItems:(NSArray *)activityItems { return YES; }
 - (void)performActivity {
-    if (!gLastPlayedURL) return;
+    [gURLLock lock];
+    NSURL *url = gLastPlayedURL;
+    [gURLLock unlock];
+
+    if (!url) {
+        [self activityDidFinish:NO];
+        return;
+    }
+
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-        NSData *data = [NSData dataWithContentsOfURL:gLastPlayedURL];
+        NSData *data = [NSData dataWithContentsOfURL:url];
         if (data) {
             NSString *path = [NSTemporaryDirectory() stringByAppendingPathComponent:[NSString stringWithFormat:@"if_%@.mp4", [[NSUUID UUID] UUIDString]]];
             [data writeToFile:path atomically:YES];
             UISaveVideoAtPathToSavedPhotosAlbum(path, nil, nil, nil);
         }
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self activityDidFinish:YES];
+        });
     });
-    [self activityDidFinish:YES];
 }
 + (UIActivityCategory)activityCategory { return UIActivityCategoryAction; }
 @end
@@ -46,6 +65,7 @@ static NSURL *gLastPlayedURL = nil;
 }
 - (void)close { [self dismissViewControllerAnimated:YES completion:nil]; }
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView { return 1; }
+- (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section { return 1; }
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section { return 3; }
 - (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
     UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:@"Cell" forIndexPath:indexPath];
@@ -53,6 +73,7 @@ static NSURL *gLastPlayedURL = nil;
     UISwitch *sw = [UISwitch new];
     sw.tag = indexPath.row;
     [sw addTarget:self action:@selector(t:) forControlEvents:UIControlEventValueChanged];
+    
     NSString *txt = (indexPath.row==0)?@"Block Ads":(indexPath.row==1)?@"No Watermark":@"Block Upsells";
     NSString *key = (indexPath.row==0)?kIFBlockAds:(indexPath.row==1)?kIFNoWatermark:kIFBlockUpsells;
     cell.textLabel.text = txt;
@@ -64,35 +85,83 @@ static NSURL *gLastPlayedURL = nil;
     NSString *k = (s.tag==0)?kIFBlockAds:(s.tag==1)?kIFNoWatermark:kIFBlockUpsells;
     [[NSUserDefaults standardUserDefaults] setBool:s.isOn forKey:k];
     [[NSUserDefaults standardUserDefaults] synchronize];
-    UIAlertController *a = [UIAlertController alertControllerWithTitle:@"Restart Required" message:@"Restart iFunny to apply." preferredStyle:UIAlertControllerStyleAlert];
-    [a addAction:[UIAlertAction actionWithTitle:@"Close App Now" style:UIAlertActionStyleDestructive handler:^(UIAlertAction *action) { exit(0); }]];
-    [a addAction:[UIAlertAction actionWithTitle:@"Later" style:UIAlertActionStyleCancel handler:nil]];
-    [self presentViewController:a animated:YES completion:nil];
+    
+    // Safer "Restart" Banner instead of exit(0)
+    UILabel *banner = [[UILabel alloc] initWithFrame:CGRectMake(0, 50, UIScreen.mainScreen.bounds.size.width, 44)];
+    banner.text = @"⚠️ Restart iFunny to apply changes";
+    banner.backgroundColor = [UIColor systemOrangeColor];
+    banner.textAlignment = NSTextAlignmentCenter;
+    banner.textColor = [UIColor whiteColor];
+    banner.alpha = 0;
+    
+    UIWindow *window = self.view.window;
+    [window addSubview:banner];
+    
+    [UIView animateWithDuration:0.3 animations:^{ banner.alpha = 1; } completion:^(BOOL f){
+        [UIView animateWithDuration:0.3 delay:2.0 options:0 animations:^{ banner.alpha = 0; } completion:^(BOOL f){ [banner removeFromSuperview]; }];
+    }];
 }
 @end
 
 // ==========================================================
-// 2. NETWORK INTERCEPTION (Fake Server Response)
+// 2. OPTIMIZED HELPERS
+// ==========================================================
+static Class FindSwiftClass(NSString *name) {
+    // 1. Cache results (Performance Fix)
+    static NSMutableDictionary *cache = nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{ cache = [NSMutableDictionary dictionary]; });
+    
+    if (cache[name]) return cache[name];
+    
+    // 2. Try clean name
+    Class cls = objc_getClass([name UTF8String]);
+    
+    // 3. Try Modules
+    if (!cls) {
+        NSArray *modules = @[@"Premium", @"iFunny", @"iFunnyApp", @"Core"];
+        for (NSString *module in modules) {
+            NSString *full = [NSString stringWithFormat:@"%@.%@", module, name];
+            cls = objc_getClass([full UTF8String]);
+            if (cls) break;
+        }
+    }
+    
+    // 4. Try Mangled
+    if (!cls) {
+        NSString *mangled = [NSString stringWithFormat:@"_TtC7Premium%lu%@", (unsigned long)name.length, name];
+        cls = objc_getClass([mangled UTF8String]);
+    }
+    
+    if (cls) cache[name] = cls;
+    return cls;
+}
+
+// ==========================================================
+// 3. NETWORK INTERCEPTION (Safe Version)
 // ==========================================================
 %group NetworkHook
 %hook NSURLSession
 - (NSURLSessionDataTask *)dataTaskWithRequest:(NSURLRequest *)request completionHandler:(void (^)(NSData *, NSURLResponse *, NSError *))handler {
-    NSURL *url = request.URL;
-    NSString *str = url.absoluteString;
+    NSString *str = request.URL.absoluteString;
+    
     if ([str containsString:@"premium"] || [str containsString:@"subscription"] || [str containsString:@"billing"]) {
-        NSLog(@"[iFunnier] Intercepted Request: %@", str);
-        NSDictionary *fakeResponse = @{
-            @"is_premium": @YES,
-            @"subscription_active": @YES,
-            @"video_save_enabled": @YES,
-            @"no_ads": @YES
+        IFLog("Intercepted: %@", str);
+        
+        // Return a valid dummy task to prevent crashes
+        NSURLSessionDataTask *dummy = %orig(request, ^(NSData *d, NSURLResponse *r, NSError *e){});
+        
+        NSDictionary *fake = @{
+            @"is_premium": @YES, @"subscription_active": @YES,
+            @"video_save_enabled": @YES, @"no_ads": @YES
         };
-        NSData *data = [NSJSONSerialization dataWithJSONObject:fakeResponse options:0 error:nil];
-        NSHTTPURLResponse *resp = [[NSHTTPURLResponse alloc] initWithURL:url statusCode:200 HTTPVersion:@"HTTP/1.1" headerFields:nil];
+        NSData *data = [NSJSONSerialization dataWithJSONObject:fake options:0 error:nil];
+        NSHTTPURLResponse *resp = [[NSHTTPURLResponse alloc] initWithURL:request.URL statusCode:200 HTTPVersion:@"HTTP/1.1" headerFields:nil];
+        
         if (handler) {
             dispatch_async(dispatch_get_main_queue(), ^{ handler(data, resp, nil); });
         }
-        return nil;
+        return dummy;
     }
     return %orig;
 }
@@ -100,7 +169,7 @@ static NSURL *gLastPlayedURL = nil;
 %end
 
 // ==========================================================
-// 3. SETTINGS MENU
+// 4. SETTINGS MENU (iPad Safe)
 // ==========================================================
 %group MenuHook
 %hook MenuViewController
@@ -114,28 +183,23 @@ static NSURL *gLastPlayedURL = nil;
 }
 %new
 - (void)openSettings {
-    UINavigationController *nav = [[UINavigationController alloc] initWithRootViewController:[[iFunnierSettingsViewController alloc] initWithStyle:UITableViewStyleInsetGrouped]];
+    iFunnierSettingsViewController *vc = [[iFunnierSettingsViewController alloc] initWithStyle:UITableViewStyleInsetGrouped];
+    UINavigationController *nav = [[UINavigationController alloc] initWithRootViewController:vc];
+    
+    // Fix for iPad crash
+    if (UIDevice.currentDevice.userInterfaceIdiom == UIUserInterfaceIdiomPad) {
+        nav.modalPresentationStyle = UIModalPresentationFormSheet;
+    } else {
+        nav.modalPresentationStyle = UIModalPresentationFullScreen;
+    }
+    
     [(UIViewController *)self presentViewController:nav animated:YES completion:nil];
 }
 %end
 %end
 
 // ==========================================================
-// 4. REMOTE CONFIG & EXPERIMENTS
-// ==========================================================
-%group RemoteConfigHook
-%hook FIRRemoteConfig
-- (id)configValueForKey:(NSString *)key {
-    if ([key containsString:@"premium"] || [key containsString:@"video"] || [key containsString:@"save"]) {
-        return [NSNumber numberWithBool:YES];
-    }
-    return %orig;
-}
-%end
-%end
-
-// ==========================================================
-// 5. SERVICE HOOKS (Backends)
+// 5. SERVICE HOOKS (With Mock Objects)
 // ==========================================================
 %group StatusHook
 %hook PremiumStatusServiceImpl
@@ -148,7 +212,6 @@ static NSURL *gLastPlayedURL = nil;
 - (BOOL)isEnabled { return YES; }
 - (BOOL)isFeatureAvailable:(NSInteger)f forPlan:(NSInteger)p { return YES; }
 - (BOOL)isFeatureAvailableForAnyPlan:(NSInteger)f { return YES; }
-- (BOOL)isEntryPointEnabled:(NSInteger)e { return YES; }
 %end
 %end
 
@@ -157,7 +220,6 @@ static NSURL *gLastPlayedURL = nil;
 - (BOOL)isEnabled { return YES; }
 - (BOOL)isVideoSaveEnabled { return YES; }
 - (void)setIsVideoSaveEnabled:(BOOL)enabled { %orig(YES); }
-- (BOOL)canSaveVideo { return YES; }
 - (BOOL)shouldShowUpsell { return NO; }
 + (instancetype)shared {
     id shared = %orig;
@@ -180,7 +242,17 @@ static NSURL *gLastPlayedURL = nil;
 %hook PremiumPurchaseManagerImpl
 - (BOOL)hasActiveSubscription { return YES; }
 - (BOOL)isSubscriptionActive { return YES; }
-- (id)activeSubscription { return nil; }
+- (id)activeSubscription {
+    // Return a mock object to prevent Swift crashes
+    static id mockSub = nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        Class subClass = FindSwiftClass(@"Subscription"); // Try to find real class
+        if (subClass) mockSub = [subClass new];
+        else mockSub = [NSObject new]; // Fallback
+    });
+    return mockSub;
+}
 %end
 %end
 
@@ -210,14 +282,8 @@ static NSURL *gLastPlayedURL = nil;
 %hook GADInterstitialAd
 - (void)presentFromRootViewController:(id)arg1 { }
 %end
-%hook GADMobileAds
-- (void)startWithCompletionHandler:(id)arg1 { }
-%end
 %hook ISNativeAd
 - (void)loadAd { }
-%end
-%hook IronSource
-+ (void)initWithAppKey:(id)arg1 { }
 %end
 %hook PAGBannerAd
 - (void)loadAd:(id)a { }
@@ -228,27 +294,32 @@ static NSURL *gLastPlayedURL = nil;
 %end
 
 // ==========================================================
-// 7. DIRECT UI HOOKS (Bypassing Services)
+// 7. TARGETED UI HOOKS (Performance Fix)
 // ==========================================================
 %group UIHacks
 %hook UIButton
 - (void)layoutSubviews {
     %orig;
-    // Check if this button looks like the "Save" button
-    if ([self.currentTitle containsString:@"Save"] || [self.accessibilityIdentifier containsString:@"save"]) {
+    // Optimization: Only check buttons if they have a parent (skip detached ones)
+    if (!self.superview) return;
+    
+    // Performance: Only traverse if potentially a Save button
+    NSString *txt = self.currentTitle;
+    if ((txt && [txt containsString:@"Save"]) || [self.accessibilityIdentifier containsString:@"save"]) {
+        
+        // Verify context (e.g., inside a player view) to avoid false positives?
+        // For now, the string check is efficient enough if done this way.
+        
         self.enabled = YES;
         self.userInteractionEnabled = YES;
         self.alpha = 1.0;
         
-        // Find and hide the lock icon
         for (UIView *subview in self.subviews) {
             if ([subview isKindOfClass:[UIImageView class]]) {
                 UIImageView *img = (UIImageView *)subview;
-                // If image is named "lock" or has lock identifier
-                if ([[img.image accessibilityIdentifier] containsString:@"lock"] || 
-                    [NSStringFromClass([img.image class]) containsString:@"lock"]) {
+                // Hide lock
+                if ([[img.image accessibilityIdentifier] containsString:@"lock"]) {
                     img.hidden = YES;
-                    img.alpha = 0.0;
                 }
             }
         }
@@ -258,29 +329,25 @@ static NSURL *gLastPlayedURL = nil;
 %end
 
 // ==========================================================
-// 8. JAILBREAK DETECTION BYPASS
+// 8. JAILBREAK BYPASS
 // ==========================================================
 %group JBDectionBypass
 %hook NSFileManager
 - (BOOL)fileExistsAtPath:(NSString *)path {
-    if ([path containsString:@"cydia"] || [path containsString:@"substrate"] || [path containsString:@"/bin/bash"]) {
-        return NO;
-    }
+    if ([path containsString:@"cydia"] || [path containsString:@"substrate"] || [path containsString:@"/bin/bash"]) return NO;
     return %orig;
 }
 %end
 %hook UIApplication
 - (BOOL)canOpenURL:(NSURL *)url {
-    if ([url.scheme isEqualToString:@"cydia"] || [url.scheme isEqualToString:@"sileo"]) {
-        return NO;
-    }
+    if ([url.scheme isEqualToString:@"cydia"] || [url.scheme isEqualToString:@"sileo"]) return NO;
     return %orig;
 }
 %end
 %end
 
 // ==========================================================
-// 9. SHARE SHEET & VIDEO SAVER (Direct Hook)
+// 9. SHARE SHEET (Thread Safe)
 // ==========================================================
 %group BackupVideo
 %hook AVPlayer
@@ -288,11 +355,11 @@ static NSURL *gLastPlayedURL = nil;
     %orig;
     if (item && [item respondsToSelector:@selector(asset)]) {
         id asset = [item performSelector:@selector(asset)];
-        Class urlAssetClass = objc_getClass("AVURLAsset");
-        if (asset && urlAssetClass && [asset isKindOfClass:urlAssetClass]) {
-            if ([asset respondsToSelector:@selector(URL)]) {
-                gLastPlayedURL = [asset performSelector:@selector(URL)];
-            }
+        if ([asset isKindOfClass:objc_getClass("AVURLAsset")]) {
+            NSURL *url = [asset performSelector:@selector(URL)];
+            [gURLLock lock];
+            gLastPlayedURL = url;
+            [gURLLock unlock];
         }
     }
 }
@@ -302,8 +369,7 @@ static NSURL *gLastPlayedURL = nil;
 - (instancetype)initWithActivityItems:(NSArray *)items applicationActivities:(NSArray *)activities {
     NSMutableArray *filtered = [NSMutableArray array];
     for (UIActivity *activity in activities) {
-        NSString *title = activity.activityTitle;
-        if (![title containsString:@"Premium"] && ![title containsString:@"Upgrade"]) {
+        if (![activity.activityTitle containsString:@"Premium"]) {
             [filtered addObject:activity];
         }
     }
@@ -314,41 +380,22 @@ static NSURL *gLastPlayedURL = nil;
 %end
 
 // ==========================================================
-// 10. ROBUST INITIALIZATION
+// 10. OPTIMIZED GHOST HOOK
 // ==========================================================
-static Class FindSwiftClass(NSString *name) {
-    Class cls = objc_getClass([name UTF8String]);
-    if (cls) return cls;
-    
-    NSArray *modules = @[@"Premium", @"iFunny", @"iFunnyApp", @"Core"];
-    for (NSString *module in modules) {
-        NSString *fullName = [NSString stringWithFormat:@"%@.%@", module, name];
-        cls = objc_getClass([fullName UTF8String]);
-        if (cls) return cls;
-    }
-    
-    NSString *mangled = [NSString stringWithFormat:@"_TtC7Premium%lu%@", (unsigned long)name.length, name];
-    cls = objc_getClass([mangled UTF8String]);
-    if (cls) return cls;
-
-    return nil;
-}
-
-// GHOST CLASS HOOK (Catches classes as they load)
 %group GhostClassHook
 %hook NSObject
 + (void)initialize {
     %orig;
     const char *cName = class_getName(self);
-    if (!cName) return;
+    // Early exit for performance (Critical Fix)
+    if (!cName || cName[0] != '_' || !strstr(cName, "Premium")) return;
     
-    // Only verify "VideoSave" related classes
+    // Only check specific targets
     if (strstr(cName, "VideoSaveEnableServiceImpl")) {
-        NSLog(@"[iFunnier] Ghost Class Caught: %s", cName);
+        IFLog("Ghost Caught: %s", cName);
         %init(VideoHook, VideoSaveEnableServiceImpl = self);
     }
-    // Only verify "Menu" classes (UI)
-    if (strstr(cName, "MenuViewController") && strstr(cName, "Menu")) {
+    if (strstr(cName, "MenuViewController")) {
         %init(MenuHook, MenuViewController = self);
     }
 }
@@ -356,43 +403,40 @@ static Class FindSwiftClass(NSString *name) {
 %end
 
 %ctor {
-    // 1. CLEAR CACHE
+    gURLLock = [[NSLock alloc] init];
+    
+    // Cache Busting
     NSUserDefaults *d = [NSUserDefaults standardUserDefaults];
     [d removeObjectForKey:@"premium_status"];
-    [d removeObjectForKey:@"subscription_status"];
-    [d removeObjectForKey:@"video_save_enabled"];
+    
     if (![d objectForKey:kIFBlockAds]) [d setBool:YES forKey:kIFBlockAds];
-    [d synchronize];
-
-    // 2. INIT HOOKS IMMEDIATELY
+    
+    // Core Hooks
+    %init(BackupVideo);
+    %init(NetworkHook);
+    %init(JBDectionBypass);
+    %init(UIHacks);
+    
     if ([d boolForKey:kIFBlockAds]) %init(AdBlocker);
-    %init(BackupVideo); // Share Sheet Hook
-    %init(NetworkHook); // Server Fake Hook
-    %init(JBDectionBypass); // Hide Jailbreak
-    %init(UIHacks); // Direct UI Manipulation (Hide Lock Icon)
 
-    // 3. FIND CLASSES
-    Class statusCls = FindSwiftClass(@"PremiumStatusServiceImpl");
-    if (statusCls) %init(StatusHook, PremiumStatusServiceImpl = statusCls);
-
-    Class featuresCls = FindSwiftClass(@"PremiumFeaturesServiceImpl");
-    if (featuresCls) %init(FeaturesHook, PremiumFeaturesServiceImpl = featuresCls);
-
-    Class videoCls = FindSwiftClass(@"VideoSaveEnableServiceImpl");
-    if (videoCls) %init(VideoHook, VideoSaveEnableServiceImpl = videoCls);
+    // Initial Class Lookup
+    #define HOOK_IF_FOUND(grp, clsName) \
+        do { \
+            Class c = FindSwiftClass(@#clsName); \
+            if (c) %init(grp, clsName = c); \
+        } while(0)
     
-    Class offerCls = FindSwiftClass(@"LimitedTimeOfferServiceImpl");
-    if (offerCls) %init(OfferHook, LimitedTimeOfferServiceImpl = offerCls);
-
-    Class purchaseCls = FindSwiftClass(@"PremiumPurchaseManagerImpl");
-    if (purchaseCls) %init(PurchaseHook, PremiumPurchaseManagerImpl = purchaseCls);
-
-    Class iconsCls = FindSwiftClass(@"PremiumAppIconsServiceImpl");
-    if (iconsCls) %init(IconsHook, PremiumAppIconsServiceImpl = iconsCls);
+    HOOK_IF_FOUND(StatusHook, PremiumStatusServiceImpl);
+    HOOK_IF_FOUND(FeaturesHook, PremiumFeaturesServiceImpl);
+    HOOK_IF_FOUND(VideoHook, VideoSaveEnableServiceImpl);
+    HOOK_IF_FOUND(OfferHook, LimitedTimeOfferServiceImpl);
+    HOOK_IF_FOUND(PurchaseHook, PremiumPurchaseManagerImpl);
+    HOOK_IF_FOUND(IconsHook, PremiumAppIconsServiceImpl);
     
-    Class rcCls = objc_getClass("FIRRemoteConfig");
-    if (rcCls) %init(RemoteConfigHook, FIRRemoteConfig = rcCls);
-
-    // 4. GHOST CLASS HOOK (Late Init)
+    // Remote Config
+    Class rc = objc_getClass("FIRRemoteConfig");
+    if (rc) %init(RemoteConfigHook, FIRRemoteConfig = rc);
+    
+    // Enable Ghost Hook as fallback
     %init(GhostClassHook);
 }

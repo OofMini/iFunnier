@@ -65,6 +65,7 @@ static NSURL *gLastPlayedURL = nil;
 }
 - (void)close { [self dismissViewControllerAnimated:YES completion:nil]; }
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView { return 1; }
+- (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section { return 1; }
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section { return 3; }
 - (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
     UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:@"Cell" forIndexPath:indexPath];
@@ -85,7 +86,6 @@ static NSURL *gLastPlayedURL = nil;
     [[NSUserDefaults standardUserDefaults] setBool:s.isOn forKey:k];
     [[NSUserDefaults standardUserDefaults] synchronize];
     
-    // Safer "Restart" Banner instead of exit(0)
     UILabel *banner = [[UILabel alloc] initWithFrame:CGRectMake(0, 50, UIScreen.mainScreen.bounds.size.width, 44)];
     banner.text = @"⚠️ Restart iFunny to apply changes";
     banner.backgroundColor = [UIColor systemOrangeColor];
@@ -106,17 +106,14 @@ static NSURL *gLastPlayedURL = nil;
 // 2. OPTIMIZED HELPERS
 // ==========================================================
 static Class FindSwiftClass(NSString *name) {
-    // 1. Cache results (Performance Fix)
     static NSMutableDictionary *cache = nil;
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{ cache = [NSMutableDictionary dictionary]; });
     
     if (cache[name]) return cache[name];
     
-    // 2. Try clean name
     Class cls = objc_getClass([name UTF8String]);
     
-    // 3. Try Modules
     if (!cls) {
         NSArray *modules = @[@"Premium", @"iFunny", @"iFunnyApp", @"Core"];
         for (NSString *module in modules) {
@@ -126,7 +123,6 @@ static Class FindSwiftClass(NSString *name) {
         }
     }
     
-    // 4. Try Mangled
     if (!cls) {
         NSString *mangled = [NSString stringWithFormat:@"_TtC7Premium%lu%@", (unsigned long)name.length, name];
         cls = objc_getClass([mangled UTF8String]);
@@ -137,7 +133,7 @@ static Class FindSwiftClass(NSString *name) {
 }
 
 // ==========================================================
-// 3. NETWORK INTERCEPTION (Safe Version)
+// 3. NETWORK INTERCEPTION
 // ==========================================================
 %group NetworkHook
 %hook NSURLSession
@@ -147,7 +143,6 @@ static Class FindSwiftClass(NSString *name) {
     if ([str containsString:@"premium"] || [str containsString:@"subscription"] || [str containsString:@"billing"]) {
         IFLog("Intercepted: %@", str);
         
-        // Return a valid dummy task to prevent crashes
         NSURLSessionDataTask *dummy = %orig(request, ^(NSData *d, NSURLResponse *r, NSError *e){});
         
         NSDictionary *fake = @{
@@ -168,9 +163,11 @@ static Class FindSwiftClass(NSString *name) {
 %end
 
 // ==========================================================
-// 4. SETTINGS MENU (iPad Safe)
+// 4. MENU HOOKS (Split for duplicate init fix)
 // ==========================================================
-%group MenuHook
+
+// Define the logic once via copy-paste to avoid macros with %new which can be buggy
+%group MenuHookStatic
 %hook MenuViewController
 - (void)viewDidAppear:(BOOL)animated {
     %orig;
@@ -184,37 +181,47 @@ static Class FindSwiftClass(NSString *name) {
 - (void)openSettings {
     iFunnierSettingsViewController *vc = [[iFunnierSettingsViewController alloc] initWithStyle:UITableViewStyleInsetGrouped];
     UINavigationController *nav = [[UINavigationController alloc] initWithRootViewController:vc];
-    
-    // Fix for iPad crash
     if (UIDevice.currentDevice.userInterfaceIdiom == UIUserInterfaceIdiomPad) {
         nav.modalPresentationStyle = UIModalPresentationFormSheet;
     } else {
         nav.modalPresentationStyle = UIModalPresentationFullScreen;
     }
-    
+    [(UIViewController *)self presentViewController:nav animated:YES completion:nil];
+}
+%end
+%end
+
+// Dynamic copy for Ghost Class Hook
+%group MenuHookDynamic
+%hook MenuViewController
+- (void)viewDidAppear:(BOOL)animated {
+    %orig;
+    UIViewController *vc = (UIViewController *)self;
+    if (vc.navigationItem.rightBarButtonItem && vc.navigationItem.rightBarButtonItem.tag == 999) return;
+    UIBarButtonItem *btn = [[UIBarButtonItem alloc] initWithImage:[UIImage systemImageNamed:@"gear"] style:UIBarButtonItemStylePlain target:self action:@selector(openSettings)];
+    btn.tag = 999;
+    vc.navigationItem.rightBarButtonItem = btn;
+}
+%new
+- (void)openSettings {
+    iFunnierSettingsViewController *vc = [[iFunnierSettingsViewController alloc] initWithStyle:UITableViewStyleInsetGrouped];
+    UINavigationController *nav = [[UINavigationController alloc] initWithRootViewController:vc];
+    if (UIDevice.currentDevice.userInterfaceIdiom == UIUserInterfaceIdiomPad) {
+        nav.modalPresentationStyle = UIModalPresentationFormSheet;
+    } else {
+        nav.modalPresentationStyle = UIModalPresentationFullScreen;
+    }
     [(UIViewController *)self presentViewController:nav animated:YES completion:nil];
 }
 %end
 %end
 
 // ==========================================================
-// 5. SERVICE HOOKS (With Mock Objects)
+// 5. VIDEO SAVER HOOKS (Split for duplicate init fix)
 // ==========================================================
-%group StatusHook
-%hook PremiumStatusServiceImpl
-- (BOOL)isActive { return YES; }
-%end
-%end
 
-%group FeaturesHook
-%hook PremiumFeaturesServiceImpl
-- (BOOL)isEnabled { return YES; }
-- (BOOL)isFeatureAvailable:(NSInteger)f forPlan:(NSInteger)p { return YES; }
-- (BOOL)isFeatureAvailableForAnyPlan:(NSInteger)f { return YES; }
-%end
-%end
-
-%group VideoHook
+// Static Group (for ctor)
+%group VideoHookStatic
 %hook VideoSaveEnableServiceImpl
 - (BOOL)isEnabled { return YES; }
 - (BOOL)isVideoSaveEnabled { return YES; }
@@ -230,6 +237,40 @@ static Class FindSwiftClass(NSString *name) {
 %end
 %end
 
+// Dynamic Group (for Ghost Hook)
+%group VideoHookDynamic
+%hook VideoSaveEnableServiceImpl
+- (BOOL)isEnabled { return YES; }
+- (BOOL)isVideoSaveEnabled { return YES; }
+- (void)setIsVideoSaveEnabled:(BOOL)enabled { %orig(YES); }
+- (BOOL)shouldShowUpsell { return NO; }
++ (instancetype)shared {
+    id shared = %orig;
+    if ([shared respondsToSelector:@selector(setIsVideoSaveEnabled:)]) {
+        [shared performSelector:@selector(setIsVideoSaveEnabled:) withObject:@YES];
+    }
+    return shared;
+}
+%end
+%end
+
+// ==========================================================
+// 6. OTHER SERVICE HOOKS
+// ==========================================================
+%group StatusHook
+%hook PremiumStatusServiceImpl
+- (BOOL)isActive { return YES; }
+%end
+%end
+
+%group FeaturesHook
+%hook PremiumFeaturesServiceImpl
+- (BOOL)isEnabled { return YES; }
+- (BOOL)isFeatureAvailable:(NSInteger)f forPlan:(NSInteger)p { return YES; }
+- (BOOL)isFeatureAvailableForAnyPlan:(NSInteger)f { return YES; }
+%end
+%end
+
 %group OfferHook
 %hook LimitedTimeOfferServiceImpl
 - (BOOL)shouldShowOffer { return NO; }
@@ -242,13 +283,12 @@ static Class FindSwiftClass(NSString *name) {
 - (BOOL)hasActiveSubscription { return YES; }
 - (BOOL)isSubscriptionActive { return YES; }
 - (id)activeSubscription {
-    // Return a mock object to prevent Swift crashes
     static id mockSub = nil;
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
-        Class subClass = FindSwiftClass(@"Subscription"); // Try to find real class
+        Class subClass = FindSwiftClass(@"Subscription");
         if (subClass) mockSub = [subClass new];
-        else mockSub = [NSObject new]; // Fallback
+        else mockSub = [NSObject new];
     });
     return mockSub;
 }
@@ -263,7 +303,7 @@ static Class FindSwiftClass(NSString *name) {
 %end
 
 // ==========================================================
-// 6. AD BLOCKER
+// 7. AD BLOCKER
 // ==========================================================
 %group AdBlocker
 %hook ALAdService
@@ -293,7 +333,7 @@ static Class FindSwiftClass(NSString *name) {
 %end
 
 // ==========================================================
-// 7. TARGETED UI HOOKS (Performance Fix)
+// 8. TARGETED UI HOOKS
 // ==========================================================
 %group UIHacks
 %hook UIButton
@@ -303,7 +343,6 @@ static Class FindSwiftClass(NSString *name) {
     
     NSString *txt = self.currentTitle;
     if ((txt && [txt containsString:@"Save"]) || [self.accessibilityIdentifier containsString:@"save"]) {
-        
         self.enabled = YES;
         self.userInteractionEnabled = YES;
         self.alpha = 1.0;
@@ -311,7 +350,6 @@ static Class FindSwiftClass(NSString *name) {
         for (UIView *subview in self.subviews) {
             if ([subview isKindOfClass:[UIImageView class]]) {
                 UIImageView *img = (UIImageView *)subview;
-                // Hide lock
                 if ([[img.image accessibilityIdentifier] containsString:@"lock"]) {
                     img.hidden = YES;
                 }
@@ -323,7 +361,7 @@ static Class FindSwiftClass(NSString *name) {
 %end
 
 // ==========================================================
-// 8. JAILBREAK BYPASS
+// 9. JAILBREAK BYPASS
 // ==========================================================
 %group JBDectionBypass
 %hook NSFileManager
@@ -341,7 +379,7 @@ static Class FindSwiftClass(NSString *name) {
 %end
 
 // ==========================================================
-// 9. SHARE SHEET (Thread Safe)
+// 10. SHARE SHEET
 // ==========================================================
 %group BackupVideo
 %hook AVPlayer
@@ -374,23 +412,22 @@ static Class FindSwiftClass(NSString *name) {
 %end
 
 // ==========================================================
-// 10. OPTIMIZED GHOST HOOK
+// 11. GHOST HOOK (Uses Dynamic Groups)
 // ==========================================================
 %group GhostClassHook
 %hook NSObject
 + (void)initialize {
     %orig;
     const char *cName = class_getName(self);
-    // Early exit for performance (Critical Fix)
     if (!cName || cName[0] != '_' || !strstr(cName, "Premium")) return;
     
-    // Only check specific targets
+    // Use Dynamic Groups here
     if (strstr(cName, "VideoSaveEnableServiceImpl")) {
         IFLog("Ghost Caught: %s", cName);
-        %init(VideoHook, VideoSaveEnableServiceImpl = self);
+        %init(VideoHookDynamic, VideoSaveEnableServiceImpl = self);
     }
     if (strstr(cName, "MenuViewController")) {
-        %init(MenuHook, MenuViewController = self);
+        %init(MenuHookDynamic, MenuViewController = self);
     }
 }
 %end
@@ -399,13 +436,11 @@ static Class FindSwiftClass(NSString *name) {
 %ctor {
     gURLLock = [[NSLock alloc] init];
     
-    // Cache Busting
     NSUserDefaults *d = [NSUserDefaults standardUserDefaults];
     [d removeObjectForKey:@"premium_status"];
     
     if (![d objectForKey:kIFBlockAds]) [d setBool:YES forKey:kIFBlockAds];
     
-    // Core Hooks
     %init(BackupVideo);
     %init(NetworkHook);
     %init(JBDectionBypass);
@@ -413,7 +448,7 @@ static Class FindSwiftClass(NSString *name) {
     
     if ([d boolForKey:kIFBlockAds]) %init(AdBlocker);
 
-    // FIX: Manual Initialization (No Macros allowed here for %init)
+    // Initialization Logic using Static Groups
     
     Class c;
     
@@ -423,8 +458,9 @@ static Class FindSwiftClass(NSString *name) {
     c = FindSwiftClass(@"PremiumFeaturesServiceImpl");
     if (c) %init(FeaturesHook, PremiumFeaturesServiceImpl = c);
     
+    // Use Static Group
     c = FindSwiftClass(@"VideoSaveEnableServiceImpl");
-    if (c) %init(VideoHook, VideoSaveEnableServiceImpl = c);
+    if (c) %init(VideoHookStatic, VideoSaveEnableServiceImpl = c);
     
     c = FindSwiftClass(@"LimitedTimeOfferServiceImpl");
     if (c) %init(OfferHook, LimitedTimeOfferServiceImpl = c);
@@ -435,10 +471,13 @@ static Class FindSwiftClass(NSString *name) {
     c = FindSwiftClass(@"PremiumAppIconsServiceImpl");
     if (c) %init(IconsHook, PremiumAppIconsServiceImpl = c);
     
-    // Remote Config
+    // Use Static Group
+    c = FindSwiftClass(@"MenuViewController");
+    if (!c) c = objc_getClass("MenuViewController");
+    if (c) %init(MenuHookStatic, MenuViewController = c);
+    
     Class rc = objc_getClass("FIRRemoteConfig");
     if (rc) %init(RemoteConfigHook, FIRRemoteConfig = rc);
     
-    // Enable Ghost Hook as fallback
     %init(GhostClassHook);
 }

@@ -12,7 +12,75 @@
 static BOOL gHooksInitialized = NO;
 
 // ==========================================================
-// 1. PREMIUM STATUS (The Master Switch)
+// 1. SETTINGS MENU UI (Merged)
+// ==========================================================
+@interface iFunnierSettingsViewController : UITableViewController @end
+
+@implementation iFunnierSettingsViewController
+- (void)viewDidLoad {
+    [super viewDidLoad];
+    self.title = @"iFunnier Control";
+    self.view.backgroundColor = [UIColor systemGroupedBackgroundColor];
+    [self.tableView registerClass:[UITableViewCell class] forCellReuseIdentifier:@"Cell"];
+    self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemDone target:self action:@selector(close)];
+}
+- (void)close { [self dismissViewControllerAnimated:YES completion:nil]; }
+- (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView { return 1; }
+- (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section { return 3; }
+- (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
+    UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:@"Cell" forIndexPath:indexPath];
+    cell.selectionStyle = UITableViewCellSelectionStyleNone;
+    
+    UISwitch *sw = [UISwitch new];
+    sw.tag = indexPath.row;
+    [sw addTarget:self action:@selector(t:) forControlEvents:UIControlEventValueChanged];
+    
+    NSString *txt = @"";
+    NSString *key = @"";
+    if (indexPath.row == 0) { txt = @"Block Ads"; key = @"kIFBlockAds"; }
+    else if (indexPath.row == 1) { txt = @"No Watermark"; key = @"kIFNoWatermark"; }
+    else if (indexPath.row == 2) { txt = @"Block Upsells"; key = @"kIFBlockUpsells"; }
+    
+    cell.textLabel.text = txt;
+    [sw setOn:[[NSUserDefaults standardUserDefaults] boolForKey:key] animated:NO];
+    cell.accessoryView = sw;
+    return cell;
+}
+- (void)t:(UISwitch *)s {
+    NSString *k = (s.tag==0)?@"kIFBlockAds":(s.tag==1)?@"kIFNoWatermark":@"kIFBlockUpsells";
+    [[NSUserDefaults standardUserDefaults] setBool:s.isOn forKey:k];
+    [[NSUserDefaults standardUserDefaults] synchronize];
+}
+@end
+
+// ==========================================================
+// 2. SETTINGS BUTTON INJECTION
+// ==========================================================
+%group MenuHook
+%hook MenuViewController
+- (void)viewDidAppear:(BOOL)animated {
+    %orig;
+    UIViewController *vc = (UIViewController *)self;
+    if (vc.navigationItem.rightBarButtonItem && vc.navigationItem.rightBarButtonItem.tag == 999) return;
+    
+    UIBarButtonItem *settingsBtn = [[UIBarButtonItem alloc] initWithImage:[UIImage systemImageNamed:@"gear"] 
+                                                                    style:UIBarButtonItemStylePlain 
+                                                                   target:self 
+                                                                   action:@selector(openIFunnierSettings)];
+    settingsBtn.tag = 999;
+    vc.navigationItem.rightBarButtonItem = settingsBtn;
+}
+%new
+- (void)openIFunnierSettings {
+    iFunnierSettingsViewController *vc = [[iFunnierSettingsViewController alloc] initWithStyle:UITableViewStyleInsetGrouped];
+    UINavigationController *nav = [[UINavigationController alloc] initWithRootViewController:vc];
+    [(UIViewController *)self presentViewController:nav animated:YES completion:nil];
+}
+%end
+%end
+
+// ==========================================================
+// 3. PREMIUM STATUS
 // ==========================================================
 %group StatusHook
 %hook PremiumStatusServiceImpl
@@ -21,7 +89,7 @@ static BOOL gHooksInitialized = NO;
 %end
 
 // ==========================================================
-// 2. PREMIUM FEATURES (The Perks)
+// 4. PREMIUM FEATURES
 // ==========================================================
 %group FeaturesHook
 %hook PremiumFeaturesServiceImpl
@@ -33,7 +101,7 @@ static BOOL gHooksInitialized = NO;
 %end
 
 // ==========================================================
-// 3. VIDEO SAVER (Native Save Button)
+// 5. VIDEO SAVER (Native Button)
 // ==========================================================
 %group VideoHook
 %hook VideoSaveEnableServiceImpl
@@ -45,7 +113,7 @@ static BOOL gHooksInitialized = NO;
 %end
 
 // ==========================================================
-// 4. PURCHASE MANAGER (Backup Check)
+// 6. PURCHASE MANAGER
 // ==========================================================
 %group PurchaseHook
 %hook PremiumPurchaseManagerImpl
@@ -56,7 +124,7 @@ static BOOL gHooksInitialized = NO;
 %end
 
 // ==========================================================
-// 5. APP ICONS
+// 7. APP ICONS
 // ==========================================================
 %group IconsHook
 %hook PremiumAppIconsServiceImpl
@@ -66,17 +134,16 @@ static BOOL gHooksInitialized = NO;
 %end
 
 // ==========================================================
-// 6. NUCLEAR AD BLOCKER (Updated for AppLovin MAX)
+// 8. NUCLEAR AD BLOCKER (Optimized)
 // ==========================================================
 %group AdBlocker
 
-// --- AppLovin (Legacy) ---
+// AppLovin (Legacy)
 %hook ALAdService
 - (void)loadNextAd:(id)a andNotify:(id)b { }
 %end
 
-// --- AppLovin MAX (Newer SDK) ---
-// iFunny now uses 'MA' prefixed classes for ads
+// AppLovin MAX (Modern)
 %hook MARequestManager
 - (void)loadAdWithAdUnitIdentifier:(id)id { }
 %end
@@ -84,7 +151,7 @@ static BOOL gHooksInitialized = NO;
 - (void)loadAd:(id)ad { }
 %end
 
-// --- Google AdMob ---
+// Google AdMob
 %hook GADBannerView
 - (void)loadRequest:(id)arg1 { }
 %end
@@ -92,15 +159,23 @@ static BOOL gHooksInitialized = NO;
 - (void)presentFromRootViewController:(id)arg1 { }
 %end
 
-// --- IronSource ---
+// IronSource
 %hook ISNativeAd
 - (void)loadAd { }
+%end
+
+// Pangle (TikTok Ads) - ADDED BACK
+%hook PAGBannerAd
+- (void)loadAd:(id)a { }
+%end
+%hook PAGNativeAd
+- (void)loadAd:(id)a { }
 %end
 
 %end
 
 // ==========================================================
-// 7. VIDEO SAVER HELPER (Backup Strategy)
+// 9. VIDEO SAVER BACKUP (Share Sheet)
 // ==========================================================
 %group BackupVideo
 static NSURL *gLastPlayedURL = nil;
@@ -123,14 +198,12 @@ static NSURL *gLastPlayedURL = nil;
 %hook UIActivityViewController
 - (instancetype)initWithActivityItems:(NSArray *)items applicationActivities:(NSArray *)activities {
     NSMutableArray *newActivities = [NSMutableArray arrayWithArray:activities];
-    // Note: IFDownloadActivity implementation is assumed to be below or in a separate file
-    // For this single-file fix, we assume the class definition exists as in previous versions
+    // Note: IFDownloadActivity class is defined below
     return %orig(items, newActivities);
 }
 %end
 %end
 
-// --- Helper for IFDownloadActivity ---
 @interface IFDownloadActivity : UIActivity @end
 @implementation IFDownloadActivity
 - (UIActivityType)activityType { return @"com.ifunnier.download"; }
@@ -152,9 +225,8 @@ static NSURL *gLastPlayedURL = nil;
 + (UIActivityCategory)activityCategory { return UIActivityCategoryAction; }
 @end
 
-
 // ==========================================================
-// LATE INITIALIZATION (The Fix)
+// 10. CENTRALIZED INITIALIZATION
 // ==========================================================
 %group AppLifecycle
 %hook UIApplication
@@ -164,17 +236,15 @@ static NSURL *gLastPlayedURL = nil;
     if (gHooksInitialized) return;
     gHooksInitialized = YES;
 
-    // Initialize Ad Blockers
+    // 1. Ads
     if ([[NSUserDefaults standardUserDefaults] boolForKey:kIFBlockAds]) {
         %init(AdBlocker);
     }
     
-    // Initialize Backup Video Saver
+    // 2. Backup Video
     %init(BackupVideo);
 
-    // --- Dynamic Class Lookup ---
-    // Now that the app has launched, Frameworks should be loaded.
-
+    // 3. Dynamic Class Loading (Safe)
     Class statusCls = objc_getClass("Premium.PremiumStatusServiceImpl");
     if (!statusCls) statusCls = objc_getClass("PremiumStatusServiceImpl");
     if (statusCls) %init(StatusHook, PremiumStatusServiceImpl = statusCls);
@@ -194,16 +264,20 @@ static NSURL *gLastPlayedURL = nil;
     Class iconsCls = objc_getClass("Premium.PremiumAppIconsServiceImpl");
     if (!iconsCls) iconsCls = objc_getClass("PremiumAppIconsServiceImpl");
     if (iconsCls) %init(IconsHook, PremiumAppIconsServiceImpl = iconsCls);
+
+    // 4. Settings Menu (FIXED: Now initializes lazily)
+    Class menuCls = objc_getClass("Menu.MenuViewController");
+    if (!menuCls) menuCls = objc_getClass("MenuViewController");
+    if (menuCls) %init(MenuHook, MenuViewController = menuCls);
 }
 %end
 %end
 
 %ctor {
-    // 1. Initialize Default Preferences
+    // 1. Defaults
     NSUserDefaults *d = [NSUserDefaults standardUserDefaults];
     if (![d objectForKey:kIFBlockAds]) [d setBool:YES forKey:kIFBlockAds];
 
-    // 2. Only init the Lifecycle hook at startup.
-    // The rest will load when the app finishes launching.
+    // 2. Start Lifecycle Monitor
     %init(AppLifecycle);
 }

@@ -12,7 +12,7 @@
 static BOOL gHooksInitialized = NO;
 
 // ==========================================================
-// 1. SETTINGS MENU UI (Optimized with Alert)
+// 1. SETTINGS MENU UI (Optimized with "Close App")
 // ==========================================================
 @interface iFunnierSettingsViewController : UITableViewController @end
 
@@ -51,11 +51,16 @@ static BOOL gHooksInitialized = NO;
     [[NSUserDefaults standardUserDefaults] setBool:s.isOn forKey:k];
     [[NSUserDefaults standardUserDefaults] synchronize];
     
-    // UX Optimization: Alert user that restart is required
+    // UX Optimization: Offer to close the app immediately
     UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Restart Required" 
-                                                                   message:@"Please close and reopen iFunny for changes to take effect." 
+                                                                   message:@"Changes will take effect after you restart iFunny." 
                                                             preferredStyle:UIAlertControllerStyleAlert];
-    [alert addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
+    
+    [alert addAction:[UIAlertAction actionWithTitle:@"Later" style:UIAlertActionStyleCancel handler:nil]];
+    [alert addAction:[UIAlertAction actionWithTitle:@"Close App Now" style:UIAlertActionStyleDestructive handler:^(UIAlertAction *action) {
+        exit(0); // Force close the app for user convenience
+    }]];
+    
     [self presentViewController:alert animated:YES completion:nil];
 }
 @end
@@ -120,13 +125,14 @@ static BOOL gHooksInitialized = NO;
 %end
 
 // ==========================================================
-// 6. PURCHASE MANAGER
+// 6. PURCHASE MANAGER (Crash Fix)
 // ==========================================================
 %group PurchaseHook
 %hook PremiumPurchaseManagerImpl
 - (BOOL)hasActiveSubscription { return YES; }
 - (BOOL)isSubscriptionActive { return YES; }
-- (id)activeSubscription { return [NSObject new]; }
+// FIX: Return nil instead of [NSObject new] to prevent crashes if the app reads properties
+- (id)activeSubscription { return nil; } 
 %end
 %end
 
@@ -141,16 +147,16 @@ static BOOL gHooksInitialized = NO;
 %end
 
 // ==========================================================
-// 8. NUCLEAR AD BLOCKER (Final Polish)
+// 8. NUCLEAR AD BLOCKER (Optimized)
 // ==========================================================
 %group AdBlocker
 
-// --- AppLovin (Legacy) ---
+// AppLovin (Legacy)
 %hook ALAdService
 - (void)loadNextAd:(id)a andNotify:(id)b { }
 %end
 
-// --- AppLovin MAX (Modern) ---
+// AppLovin MAX (Modern)
 %hook MARequestManager
 - (void)loadAdWithAdUnitIdentifier:(id)id { }
 %end
@@ -158,28 +164,28 @@ static BOOL gHooksInitialized = NO;
 - (void)loadAd:(id)ad { }
 %end
 
-// --- Google AdMob ---
+// Google AdMob
 %hook GADBannerView
 - (void)loadRequest:(id)arg1 { }
 %end
 %hook GADInterstitialAd
 - (void)presentFromRootViewController:(id)arg1 { }
 %end
-// Added: Block AdMob Initialization
+// Block AdMob Initialization
 %hook GADMobileAds
 - (void)startWithCompletionHandler:(id)arg1 { }
 %end
 
-// --- IronSource ---
+// IronSource
 %hook ISNativeAd
 - (void)loadAd { }
 %end
-// Added: Block IronSource Initialization
+// Block IronSource Initialization
 %hook IronSource
 + (void)initWithAppKey:(id)arg1 { }
 %end
 
-// --- Pangle (TikTok) ---
+// Pangle (TikTok Ads)
 %hook PAGBannerAd
 - (void)loadAd:(id)a { }
 %end
@@ -213,7 +219,7 @@ static NSURL *gLastPlayedURL = nil;
 %hook UIActivityViewController
 - (instancetype)initWithActivityItems:(NSArray *)items applicationActivities:(NSArray *)activities {
     NSMutableArray *newActivities = [NSMutableArray arrayWithArray:activities];
-    // Note: IFDownloadActivity class is defined below
+    [newActivities addObject:[[IFDownloadActivity alloc] init]];
     return %orig(items, newActivities);
 }
 %end
@@ -259,7 +265,7 @@ static NSURL *gLastPlayedURL = nil;
     // 2. Backup Video
     %init(BackupVideo);
 
-    // 3. Dynamic Class Loading (Safe)
+    // 3. Dynamic Class Loading
     Class statusCls = objc_getClass("Premium.PremiumStatusServiceImpl");
     if (!statusCls) statusCls = objc_getClass("PremiumStatusServiceImpl");
     if (statusCls) %init(StatusHook, PremiumStatusServiceImpl = statusCls);

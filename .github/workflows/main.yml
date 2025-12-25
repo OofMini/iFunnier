@@ -40,7 +40,7 @@ jobs:
         run: |
           git clone --quiet -n --depth=1 --filter=tree:0 https://github.com/theos/sdks/
           cd sdks
-          git sparse-checkout set --no-cone iPhoneOS14.5.sdk
+          git sparse-checkout set --no-cone iPhoneOS16.5.sdk
           git checkout
           mkdir -p $THEOS/sdks
           mv *.sdk $THEOS/sdks/
@@ -77,13 +77,13 @@ jobs:
       - name: Create Draft Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.4-${{ github.run_number }}
-          name: iFunnier v1.4 (Build ${{ github.run_number }})
+          tag_name: v2.0-${{ github.run_number }}
+          name: iFunnier v2.0 (Build ${{ github.run_number }})
           files: ${{ github.workspace }}/iFunnier_Patched.ipa
           draft: true
           body: |
-            ### iFunnier v1.4
+            ### iFunnier v2.0
             - **Source IPA**: ${{ inputs.ipa_url }}
             - **Injection Tool**: Cyan
-            - **Menu**: Triple-Tap Screen
+            - **Menu**: Triple-Tap Screen / Sidebar Gear
             - **Status**: Draft Release

@@ -8,9 +8,11 @@ include $(THEOS)/makefiles/common.mk
 
 TWEAK_NAME = iFunnier
 
-# Only one file now
 iFunnier_FILES = Logos/iFunnier.x
 iFunnier_CFLAGS = -fobjc-arc -Wno-deprecated-declarations
+
+# CRITICAL: Link Swift Runtime
+iFunnier_LDFLAGS = -lswiftCore -lswiftFoundation
 iFunnier_FRAMEWORKS = UIKit Foundation AVFoundation
 
 include $(THEOS_MAKE_PATH)/tweak.mk

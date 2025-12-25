@@ -79,28 +79,20 @@ static NSURL *gLastPlayedURL = nil;
 - (NSURLSessionDataTask *)dataTaskWithRequest:(NSURLRequest *)request completionHandler:(void (^)(NSData *, NSURLResponse *, NSError *))handler {
     NSURL *url = request.URL;
     NSString *str = url.absoluteString;
-    
-    // Check for premium/subscription validation endpoints
     if ([str containsString:@"premium"] || [str containsString:@"subscription"] || [str containsString:@"billing"]) {
         NSLog(@"[iFunnier] Intercepted Request: %@", str);
-        
-        // Fake JSON response saying "Yes, they are premium"
         NSDictionary *fakeResponse = @{
             @"is_premium": @YES,
             @"subscription_active": @YES,
             @"video_save_enabled": @YES,
             @"no_ads": @YES
         };
-        
         NSData *data = [NSJSONSerialization dataWithJSONObject:fakeResponse options:0 error:nil];
         NSHTTPURLResponse *resp = [[NSHTTPURLResponse alloc] initWithURL:url statusCode:200 HTTPVersion:@"HTTP/1.1" headerFields:nil];
-        
         if (handler) {
-            dispatch_async(dispatch_get_main_queue(), ^{
-                handler(data, resp, nil);
-            });
+            dispatch_async(dispatch_get_main_queue(), ^{ handler(data, resp, nil); });
         }
-        return nil; // Block real request
+        return nil;
     }
     return %orig;
 }
@@ -129,7 +121,7 @@ static NSURL *gLastPlayedURL = nil;
 %end
 
 // ==========================================================
-// 4. REMOTE CONFIG (Google/Firebase)
+// 4. REMOTE CONFIG & EXPERIMENTS
 // ==========================================================
 %group RemoteConfigHook
 %hook FIRRemoteConfig
@@ -164,10 +156,10 @@ static NSURL *gLastPlayedURL = nil;
 %hook VideoSaveEnableServiceImpl
 - (BOOL)isEnabled { return YES; }
 - (BOOL)isVideoSaveEnabled { return YES; }
-- (void)setIsVideoSaveEnabled:(BOOL)enabled { %orig(YES); } // Setter Hook
+- (void)setIsVideoSaveEnabled:(BOOL)enabled { %orig(YES); }
 - (BOOL)canSaveVideo { return YES; }
 - (BOOL)shouldShowUpsell { return NO; }
-+ (instancetype)shared { // Singleton Hook
++ (instancetype)shared {
     id shared = %orig;
     if ([shared respondsToSelector:@selector(setIsVideoSaveEnabled:)]) {
         [shared performSelector:@selector(setIsVideoSaveEnabled:) withObject:@YES];
@@ -236,7 +228,59 @@ static NSURL *gLastPlayedURL = nil;
 %end
 
 // ==========================================================
-// 7. SHARE SHEET & VIDEO SAVER (Direct Hook)
+// 7. DIRECT UI HOOKS (Bypassing Services)
+// ==========================================================
+%group UIHacks
+%hook UIButton
+- (void)layoutSubviews {
+    %orig;
+    // Check if this button looks like the "Save" button
+    if ([self.currentTitle containsString:@"Save"] || [self.accessibilityIdentifier containsString:@"save"]) {
+        self.enabled = YES;
+        self.userInteractionEnabled = YES;
+        self.alpha = 1.0;
+        
+        // Find and hide the lock icon
+        for (UIView *subview in self.subviews) {
+            if ([subview isKindOfClass:[UIImageView class]]) {
+                UIImageView *img = (UIImageView *)subview;
+                // If image is named "lock" or has lock identifier
+                if ([[img.image accessibilityIdentifier] containsString:@"lock"] || 
+                    [NSStringFromClass([img.image class]) containsString:@"lock"]) {
+                    img.hidden = YES;
+                    img.alpha = 0.0;
+                }
+            }
+        }
+    }
+}
+%end
+%end
+
+// ==========================================================
+// 8. JAILBREAK DETECTION BYPASS
+// ==========================================================
+%group JBDectionBypass
+%hook NSFileManager
+- (BOOL)fileExistsAtPath:(NSString *)path {
+    if ([path containsString:@"cydia"] || [path containsString:@"substrate"] || [path containsString:@"/bin/bash"]) {
+        return NO;
+    }
+    return %orig;
+}
+%end
+%hook UIApplication
+- (BOOL)canOpenURL:(NSURL *)url {
+    if ([url.scheme isEqualToString:@"cydia"] || [url.scheme isEqualToString:@"sileo"]) {
+        return NO;
+    }
+    return %orig;
+}
+%end
+%end
+
+// ==========================================================
+// 9. SHARE SHEET & VIDEO SAVER (Direct Hook)
 // ==========================================================
 %group BackupVideo
 %hook AVPlayer
@@ -257,14 +301,12 @@ static NSURL *gLastPlayedURL = nil;
 %hook UIActivityViewController
 - (instancetype)initWithActivityItems:(NSArray *)items applicationActivities:(NSArray *)activities {
     NSMutableArray *filtered = [NSMutableArray array];
-    // Remove locked/premium activities
     for (UIActivity *activity in activities) {
         NSString *title = activity.activityTitle;
         if (![title containsString:@"Premium"] && ![title containsString:@"Upgrade"]) {
             [filtered addObject:activity];
         }
     }
-    // Add our UNLOCKED download activity
     [filtered addObject:[[IFDownloadActivity alloc] init]];
     return %orig(items, filtered);
 }
@@ -272,7 +314,7 @@ static NSURL *gLastPlayedURL = nil;
 %end
 
 // ==========================================================
-// 8. ROBUST INITIALIZATION (With Ghost Class Detection)
+// 10. ROBUST INITIALIZATION
 // ==========================================================
 static Class FindSwiftClass(NSString *name) {
     Class cls = objc_getClass([name UTF8String]);
@@ -292,8 +334,29 @@ static Class FindSwiftClass(NSString *name) {
     return nil;
 }
 
+// GHOST CLASS HOOK (Catches classes as they load)
+%group GhostClassHook
+%hook NSObject
++ (void)initialize {
+    %orig;
+    const char *cName = class_getName(self);
+    if (!cName) return;
+    
+    // Only verify "VideoSave" related classes
+    if (strstr(cName, "VideoSaveEnableServiceImpl")) {
+        NSLog(@"[iFunnier] Ghost Class Caught: %s", cName);
+        %init(VideoHook, VideoSaveEnableServiceImpl = self);
+    }
+    // Only verify "Menu" classes (UI)
+    if (strstr(cName, "MenuViewController") && strstr(cName, "Menu")) {
+        %init(MenuHook, MenuViewController = self);
+    }
+}
+%end
+%end
+
 %ctor {
-    // 1. CLEAR CACHE (Persistence Busting)
+    // 1. CLEAR CACHE
     NSUserDefaults *d = [NSUserDefaults standardUserDefaults];
     [d removeObjectForKey:@"premium_status"];
     [d removeObjectForKey:@"subscription_status"];
@@ -301,10 +364,12 @@ static Class FindSwiftClass(NSString *name) {
     if (![d objectForKey:kIFBlockAds]) [d setBool:YES forKey:kIFBlockAds];
     [d synchronize];
 
-    // 2. INIT HOOKS IMMEDIATELY (Don't wait for didFinishLaunching)
+    // 2. INIT HOOKS IMMEDIATELY
     if ([d boolForKey:kIFBlockAds]) %init(AdBlocker);
     %init(BackupVideo); // Share Sheet Hook
     %init(NetworkHook); // Server Fake Hook
+    %init(JBDectionBypass); // Hide Jailbreak
+    %init(UIHacks); // Direct UI Manipulation (Hide Lock Icon)
 
     // 3. FIND CLASSES
     Class statusCls = FindSwiftClass(@"PremiumStatusServiceImpl");
@@ -331,24 +396,3 @@ static Class FindSwiftClass(NSString *name) {
     // 4. GHOST CLASS HOOK (Late Init)
     %init(GhostClassHook);
 }
-
-// 5. GHOST CLASS HOOK (Catches classes as they load)
-%group GhostClassHook
-%hook NSObject
-+ (void)initialize {
-    %orig;
-    const char *cName = class_getName(self);
-    if (!cName) return;
-    
-    // Only verify "VideoSave" related classes
-    if (strstr(cName, "VideoSaveEnableServiceImpl")) {
-        NSLog(@"[iFunnier] Ghost Class Caught: %s", cName);
-        %init(VideoHook, VideoSaveEnableServiceImpl = self);
-    }
-    // Only verify "Menu" classes (UI)
-    if (strstr(cName, "MenuViewController") && strstr(cName, "Menu")) {
-        %init(MenuHook, MenuViewController = self);
-    }
-}
-%end
-%end

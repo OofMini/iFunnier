@@ -64,9 +64,11 @@ static NSURL *gLastPlayedURL = nil;
     self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemDone target:self action:@selector(close)];
 }
 - (void)close { [self dismissViewControllerAnimated:YES completion:nil]; }
+
+// FIXED: Removed duplicate declaration here
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView { return 1; }
-- (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section { return 1; }
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section { return 3; }
+
 - (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
     UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:@"Cell" forIndexPath:indexPath];
     cell.selectionStyle = UITableViewCellSelectionStyleNone;
@@ -302,7 +304,7 @@ static Class FindSwiftClass(NSString *name) {
 %end
 
 // ==========================================================
-// 7. REMOTE CONFIG HOOK (The Missing Piece)
+// 7. REMOTE CONFIG HOOK
 // ==========================================================
 %group RemoteConfigHook
 %hook FIRRemoteConfig

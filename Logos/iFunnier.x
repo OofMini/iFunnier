@@ -9,42 +9,10 @@
 #define kIFBlockUpsells @"kIFBlockUpsells"
 #define kIFNoWatermark @"kIFNoWatermark"
 
-static BOOL gHooksInitialized = NO;
 static NSURL *gLastPlayedURL = nil;
 
 // ==========================================================
-// 1. HELPER: CLASS DUMPER (The Magic Tool)
-// ==========================================================
-static void DumpRelevantClasses() {
-    // This logs to the Console.app on Mac or sysdiagnose
-    NSLog(@"[iFunnier] === STARTING CLASS DUMP ===");
-    
-    unsigned int count = 0;
-    Class *classes = objc_copyClassList(&count);
-    
-    for (unsigned int i = 0; i < count; i++) {
-        const char *cName = class_getName(classes[i]);
-        if (!cName) continue;
-        
-        NSString *name = [NSString stringWithUTF8String:cName];
-        
-        // Filter for keywords related to our missing features
-        if ([name containsString:@"Premium"] || 
-            [name containsString:@"VideoSave"] || 
-            [name containsString:@"Offer"] || 
-            [name containsString:@"ViewModel"] || // CHECK FOR VIEWMODELS
-            [name containsString:@"RemoteConfig"] ||
-            [name containsString:@"Experiment"]) {
-            
-            NSLog(@"[iFunnier] FOUND CANDIDATE: %@", name);
-        }
-    }
-    free(classes);
-    NSLog(@"[iFunnier] === CLASS DUMP FINISHED ===");
-}
-
-// ==========================================================
-// 2. HELPER CLASSES
+// 1. HELPER CLASSES
 // ==========================================================
 @interface IFDownloadActivity : UIActivity @end
 @implementation IFDownloadActivity
@@ -104,7 +72,43 @@ static void DumpRelevantClasses() {
 @end
 
 // ==========================================================
-// 3. SETTINGS MENU INJECTION
+// 2. NETWORK INTERCEPTION (Fake Server Response)
+// ==========================================================
+%group NetworkHook
+%hook NSURLSession
+- (NSURLSessionDataTask *)dataTaskWithRequest:(NSURLRequest *)request completionHandler:(void (^)(NSData *, NSURLResponse *, NSError *))handler {
+    NSURL *url = request.URL;
+    NSString *str = url.absoluteString;
+    
+    // Check for premium/subscription validation endpoints
+    if ([str containsString:@"premium"] || [str containsString:@"subscription"] || [str containsString:@"billing"]) {
+        NSLog(@"[iFunnier] Intercepted Request: %@", str);
+        
+        // Fake JSON response saying "Yes, they are premium"
+        NSDictionary *fakeResponse = @{
+            @"is_premium": @YES,
+            @"subscription_active": @YES,
+            @"video_save_enabled": @YES,
+            @"no_ads": @YES
+        };
+        
+        NSData *data = [NSJSONSerialization dataWithJSONObject:fakeResponse options:0 error:nil];
+        NSHTTPURLResponse *resp = [[NSHTTPURLResponse alloc] initWithURL:url statusCode:200 HTTPVersion:@"HTTP/1.1" headerFields:nil];
+        
+        if (handler) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                handler(data, resp, nil);
+            });
+        }
+        return nil; // Block real request
+    }
+    return %orig;
+}
+%end
+%end
+
+// ==========================================================
+// 3. SETTINGS MENU
 // ==========================================================
 %group MenuHook
 %hook MenuViewController
@@ -125,15 +129,12 @@ static void DumpRelevantClasses() {
 %end
 
 // ==========================================================
-// 4. REMOTE CONFIG & EXPERIMENTS (New!)
+// 4. REMOTE CONFIG (Google/Firebase)
 // ==========================================================
 %group RemoteConfigHook
-// Hook generic Remote Config to force-enable features
 %hook FIRRemoteConfig
 - (id)configValueForKey:(NSString *)key {
-    // If asking for anything premium/feature related, say YES
-    if ([key containsString:@"premium"] || [key containsString:@"video_save"] || [key containsString:@"watermark"]) {
-        // Return a dummy object that evaluates to boolean True
+    if ([key containsString:@"premium"] || [key containsString:@"video"] || [key containsString:@"save"]) {
         return [NSNumber numberWithBool:YES];
     }
     return %orig;
@@ -142,7 +143,7 @@ static void DumpRelevantClasses() {
 %end
 
 // ==========================================================
-// 5. SERVICE HOOKS (Expanded)
+// 5. SERVICE HOOKS (Backends)
 // ==========================================================
 %group StatusHook
 %hook PremiumStatusServiceImpl
@@ -163,8 +164,16 @@ static void DumpRelevantClasses() {
 %hook VideoSaveEnableServiceImpl
 - (BOOL)isEnabled { return YES; }
 - (BOOL)isVideoSaveEnabled { return YES; }
+- (void)setIsVideoSaveEnabled:(BOOL)enabled { %orig(YES); } // Setter Hook
 - (BOOL)canSaveVideo { return YES; }
 - (BOOL)shouldShowUpsell { return NO; }
++ (instancetype)shared { // Singleton Hook
+    id shared = %orig;
+    if ([shared respondsToSelector:@selector(setIsVideoSaveEnabled:)]) {
+        [shared performSelector:@selector(setIsVideoSaveEnabled:) withObject:@YES];
+    }
+    return shared;
+}
 %end
 %end
 
@@ -227,7 +236,7 @@ static void DumpRelevantClasses() {
 %end
 
 // ==========================================================
-// 7. BACKUP VIDEO SAVER
+// 7. SHARE SHEET & VIDEO SAVER (Direct Hook)
 // ==========================================================
 %group BackupVideo
 %hook AVPlayer
@@ -244,38 +253,38 @@ static void DumpRelevantClasses() {
     }
 }
 %end
+
 %hook UIActivityViewController
 - (instancetype)initWithActivityItems:(NSArray *)items applicationActivities:(NSArray *)activities {
-    NSMutableArray *newActivities = [NSMutableArray arrayWithArray:activities];
-    [newActivities addObject:[[IFDownloadActivity alloc] init]];
-    return %orig(items, newActivities);
+    NSMutableArray *filtered = [NSMutableArray array];
+    // Remove locked/premium activities
+    for (UIActivity *activity in activities) {
+        NSString *title = activity.activityTitle;
+        if (![title containsString:@"Premium"] && ![title containsString:@"Upgrade"]) {
+            [filtered addObject:activity];
+        }
+    }
+    // Add our UNLOCKED download activity
+    [filtered addObject:[[IFDownloadActivity alloc] init]];
+    return %orig(items, filtered);
 }
 %end
 %end
 
 // ==========================================================
-// 8. ROBUST INITIALIZATION
+// 8. ROBUST INITIALIZATION (With Ghost Class Detection)
 // ==========================================================
 static Class FindSwiftClass(NSString *name) {
-    // 1. Try Clean Name
     Class cls = objc_getClass([name UTF8String]);
     if (cls) return cls;
     
-    // 2. Try Modules: Premium, iFunny, iFunnyApp, Core
     NSArray *modules = @[@"Premium", @"iFunny", @"iFunnyApp", @"Core"];
     for (NSString *module in modules) {
         NSString *fullName = [NSString stringWithFormat:@"%@.%@", module, name];
         cls = objc_getClass([fullName UTF8String]);
-        if (cls) {
-            NSLog(@"[iFunnier] Hooked: %@", fullName);
-            return cls;
-        }
+        if (cls) return cls;
     }
     
-    // 3. Try Common Mangled Prefixes (Swift 5+)
-    // _TtC + Length(module) + Module + Length(name) + Name
-    // This is hard to guess perfectly, but we try the most common "Premium" one
-    // _TtC7Premium + Length + Name
     NSString *mangled = [NSString stringWithFormat:@"_TtC7Premium%lu%@", (unsigned long)name.length, name];
     cls = objc_getClass([mangled UTF8String]);
     if (cls) return cls;
@@ -283,23 +292,21 @@ static Class FindSwiftClass(NSString *name) {
     return nil;
 }
 
-%group AppLifecycle
-%hook UIApplication
-- (void)didFinishLaunching {
-    %orig;
-    if (gHooksInitialized) return;
-    gHooksInitialized = YES;
+%ctor {
+    // 1. CLEAR CACHE (Persistence Busting)
+    NSUserDefaults *d = [NSUserDefaults standardUserDefaults];
+    [d removeObjectForKey:@"premium_status"];
+    [d removeObjectForKey:@"subscription_status"];
+    [d removeObjectForKey:@"video_save_enabled"];
+    if (![d objectForKey:kIFBlockAds]) [d setBool:YES forKey:kIFBlockAds];
+    [d synchronize];
 
-    // RUN THE CLASS DUMPER
-    // Look at your Console/Syslog to see the output!
-    DumpRelevantClasses();
+    // 2. INIT HOOKS IMMEDIATELY (Don't wait for didFinishLaunching)
+    if ([d boolForKey:kIFBlockAds]) %init(AdBlocker);
+    %init(BackupVideo); // Share Sheet Hook
+    %init(NetworkHook); // Server Fake Hook
 
-    if ([[NSUserDefaults standardUserDefaults] boolForKey:kIFBlockAds]) {
-        %init(AdBlocker);
-    }
-    %init(BackupVideo);
-
-    // Try to hook Services with expanded search
+    // 3. FIND CLASSES
     Class statusCls = FindSwiftClass(@"PremiumStatusServiceImpl");
     if (statusCls) %init(StatusHook, PremiumStatusServiceImpl = statusCls);
 
@@ -317,20 +324,31 @@ static Class FindSwiftClass(NSString *name) {
 
     Class iconsCls = FindSwiftClass(@"PremiumAppIconsServiceImpl");
     if (iconsCls) %init(IconsHook, PremiumAppIconsServiceImpl = iconsCls);
+    
+    Class rcCls = objc_getClass("FIRRemoteConfig");
+    if (rcCls) %init(RemoteConfigHook, FIRRemoteConfig = rcCls);
 
-    // Try to hook Remote Config (Google/Firebase)
-    Class remoteConfigCls = objc_getClass("FIRRemoteConfig");
-    if (remoteConfigCls) %init(RemoteConfigHook, FIRRemoteConfig = remoteConfigCls);
+    // 4. GHOST CLASS HOOK (Late Init)
+    %init(GhostClassHook);
+}
 
-    Class menuCls = objc_getClass("Menu.MenuViewController");
-    if (!menuCls) menuCls = objc_getClass("MenuViewController");
-    if (menuCls) %init(MenuHook, MenuViewController = menuCls);
+// 5. GHOST CLASS HOOK (Catches classes as they load)
+%group GhostClassHook
+%hook NSObject
++ (void)initialize {
+    %orig;
+    const char *cName = class_getName(self);
+    if (!cName) return;
+    
+    // Only verify "VideoSave" related classes
+    if (strstr(cName, "VideoSaveEnableServiceImpl")) {
+        NSLog(@"[iFunnier] Ghost Class Caught: %s", cName);
+        %init(VideoHook, VideoSaveEnableServiceImpl = self);
+    }
+    // Only verify "Menu" classes (UI)
+    if (strstr(cName, "MenuViewController") && strstr(cName, "Menu")) {
+        %init(MenuHook, MenuViewController = self);
+    }
 }
 %end
 %end
-
-%ctor {
-    NSUserDefaults *d = [NSUserDefaults standardUserDefaults];
-    if (![d objectForKey:kIFBlockAds]) [d setBool:YES forKey:kIFBlockAds];
-    %init(AppLifecycle);
-}

@@ -65,7 +65,6 @@ static NSURL *gLastPlayedURL = nil;
 }
 - (void)close { [self dismissViewControllerAnimated:YES completion:nil]; }
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView { return 1; }
-- (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section { return 1; }
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section { return 3; }
 - (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
     UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:@"Cell" forIndexPath:indexPath];
@@ -300,15 +299,10 @@ static Class FindSwiftClass(NSString *name) {
 %hook UIButton
 - (void)layoutSubviews {
     %orig;
-    // Optimization: Only check buttons if they have a parent (skip detached ones)
     if (!self.superview) return;
     
-    // Performance: Only traverse if potentially a Save button
     NSString *txt = self.currentTitle;
     if ((txt && [txt containsString:@"Save"]) || [self.accessibilityIdentifier containsString:@"save"]) {
-        
-        // Verify context (e.g., inside a player view) to avoid false positives?
-        // For now, the string check is efficient enough if done this way.
         
         self.enabled = YES;
         self.userInteractionEnabled = YES;
@@ -419,19 +413,27 @@ static Class FindSwiftClass(NSString *name) {
     
     if ([d boolForKey:kIFBlockAds]) %init(AdBlocker);
 
-    // Initial Class Lookup
-    #define HOOK_IF_FOUND(grp, clsName) \
-        do { \
-            Class c = FindSwiftClass(@#clsName); \
-            if (c) %init(grp, clsName = c); \
-        } while(0)
+    // FIX: Manual Initialization (No Macros allowed here for %init)
     
-    HOOK_IF_FOUND(StatusHook, PremiumStatusServiceImpl);
-    HOOK_IF_FOUND(FeaturesHook, PremiumFeaturesServiceImpl);
-    HOOK_IF_FOUND(VideoHook, VideoSaveEnableServiceImpl);
-    HOOK_IF_FOUND(OfferHook, LimitedTimeOfferServiceImpl);
-    HOOK_IF_FOUND(PurchaseHook, PremiumPurchaseManagerImpl);
-    HOOK_IF_FOUND(IconsHook, PremiumAppIconsServiceImpl);
+    Class c;
+    
+    c = FindSwiftClass(@"PremiumStatusServiceImpl");
+    if (c) %init(StatusHook, PremiumStatusServiceImpl = c);
+    
+    c = FindSwiftClass(@"PremiumFeaturesServiceImpl");
+    if (c) %init(FeaturesHook, PremiumFeaturesServiceImpl = c);
+    
+    c = FindSwiftClass(@"VideoSaveEnableServiceImpl");
+    if (c) %init(VideoHook, VideoSaveEnableServiceImpl = c);
+    
+    c = FindSwiftClass(@"LimitedTimeOfferServiceImpl");
+    if (c) %init(OfferHook, LimitedTimeOfferServiceImpl = c);
+    
+    c = FindSwiftClass(@"PremiumPurchaseManagerImpl");
+    if (c) %init(PurchaseHook, PremiumPurchaseManagerImpl = c);
+    
+    c = FindSwiftClass(@"PremiumAppIconsServiceImpl");
+    if (c) %init(IconsHook, PremiumAppIconsServiceImpl = c);
     
     // Remote Config
     Class rc = objc_getClass("FIRRemoteConfig");

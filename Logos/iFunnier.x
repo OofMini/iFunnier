@@ -8,12 +8,37 @@
 #define kIFBlockUpsells @"kIFBlockUpsells"
 #define kIFNoWatermark @"kIFNoWatermark"
 
-// Global flag to avoid double-initialization
+// --- GLOBAL VARIABLES ---
 static BOOL gHooksInitialized = NO;
+static NSURL *gLastPlayedURL = nil; // Moved to top so everyone can see it
 
 // ==========================================================
-// 1. SETTINGS MENU UI (Optimized with "Close App")
+// 1. HELPER CLASSES (Must be defined first)
 // ==========================================================
+
+// --- DOWNLOAD ACTIVITY (Video Saver) ---
+@interface IFDownloadActivity : UIActivity @end
+@implementation IFDownloadActivity
+- (UIActivityType)activityType { return @"com.ifunnier.download"; }
+- (NSString *)activityTitle { return @"Download Video"; }
+- (UIImage *)activityImage { return [UIImage systemImageNamed:@"arrow.down.circle.fill"]; }
+- (BOOL)canPerformWithActivityItems:(NSArray *)activityItems { return YES; }
+- (void)performActivity {
+    if (!gLastPlayedURL) return;
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+        NSData *data = [NSData dataWithContentsOfURL:gLastPlayedURL];
+        if (data) {
+            NSString *path = [NSTemporaryDirectory() stringByAppendingPathComponent:[NSString stringWithFormat:@"if_%@.mp4", [[NSUUID UUID] UUIDString]]];
+            [data writeToFile:path atomically:YES];
+            UISaveVideoAtPathToSavedPhotosAlbum(path, nil, nil, nil);
+        }
+    });
+    [self activityDidFinish:YES];
+}
++ (UIActivityCategory)activityCategory { return UIActivityCategoryAction; }
+@end
+
+// --- SETTINGS MENU CONTROLLER ---
 @interface iFunnierSettingsViewController : UITableViewController @end
 
 @implementation iFunnierSettingsViewController
@@ -125,13 +150,12 @@ static BOOL gHooksInitialized = NO;
 %end
 
 // ==========================================================
-// 6. PURCHASE MANAGER (Crash Fix)
+// 6. PURCHASE MANAGER
 // ==========================================================
 %group PurchaseHook
 %hook PremiumPurchaseManagerImpl
 - (BOOL)hasActiveSubscription { return YES; }
 - (BOOL)isSubscriptionActive { return YES; }
-// FIX: Return nil instead of [NSObject new] to prevent crashes if the app reads properties
 - (id)activeSubscription { return nil; } 
 %end
 %end
@@ -147,16 +171,16 @@ static BOOL gHooksInitialized = NO;
 %end
 
 // ==========================================================
-// 8. NUCLEAR AD BLOCKER (Optimized)
+// 8. NUCLEAR AD BLOCKER
 // ==========================================================
 %group AdBlocker
 
-// AppLovin (Legacy)
+// AppLovin
 %hook ALAdService
 - (void)loadNextAd:(id)a andNotify:(id)b { }
 %end
 
-// AppLovin MAX (Modern)
+// AppLovin MAX
 %hook MARequestManager
 - (void)loadAdWithAdUnitIdentifier:(id)id { }
 %end
@@ -171,7 +195,6 @@ static BOOL gHooksInitialized = NO;
 %hook GADInterstitialAd
 - (void)presentFromRootViewController:(id)arg1 { }
 %end
-// Block AdMob Initialization
 %hook GADMobileAds
 - (void)startWithCompletionHandler:(id)arg1 { }
 %end
@@ -180,12 +203,11 @@ static BOOL gHooksInitialized = NO;
 %hook ISNativeAd
 - (void)loadAd { }
 %end
-// Block IronSource Initialization
 %hook IronSource
 + (void)initWithAppKey:(id)arg1 { }
 %end
 
-// Pangle (TikTok Ads)
+// Pangle
 %hook PAGBannerAd
 - (void)loadAd:(id)a { }
 %end
@@ -199,8 +221,6 @@ static BOOL gHooksInitialized = NO;
 // 9. VIDEO SAVER BACKUP (Share Sheet)
 // ==========================================================
 %group BackupVideo
-static NSURL *gLastPlayedURL = nil;
-
 %hook AVPlayer
 - (void)replaceCurrentItemWithPlayerItem:(id)item {
     %orig;
@@ -219,32 +239,13 @@ static NSURL *gLastPlayedURL = nil;
 %hook UIActivityViewController
 - (instancetype)initWithActivityItems:(NSArray *)items applicationActivities:(NSArray *)activities {
     NSMutableArray *newActivities = [NSMutableArray arrayWithArray:activities];
+    // Now IFDownloadActivity is defined above, so this will work!
     [newActivities addObject:[[IFDownloadActivity alloc] init]];
     return %orig(items, newActivities);
 }
 %end
 %end
 
-@interface IFDownloadActivity : UIActivity @end
-@implementation IFDownloadActivity
-- (UIActivityType)activityType { return @"com.ifunnier.download"; }
-- (NSString *)activityTitle { return @"Download Video"; }
-- (UIImage *)activityImage { return [UIImage systemImageNamed:@"arrow.down.circle.fill"]; }
-- (BOOL)canPerformWithActivityItems:(NSArray *)activityItems { return YES; }
-- (void)performActivity {
-    if (!gLastPlayedURL) return;
-    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-        NSData *data = [NSData dataWithContentsOfURL:gLastPlayedURL];
-        if (data) {
-            NSString *path = [NSTemporaryDirectory() stringByAppendingPathComponent:[NSString stringWithFormat:@"if_%@.mp4", [[NSUUID UUID] UUIDString]]];
-            [data writeToFile:path atomically:YES];
-            UISaveVideoAtPathToSavedPhotosAlbum(path, nil, nil, nil);
-        }
-    });
-    [self activityDidFinish:YES];
-}
-+ (UIActivityCategory)activityCategory { return UIActivityCategoryAction; }
-@end
 
 // ==========================================================
 // 10. CENTRALIZED INITIALIZATION
@@ -257,7 +258,7 @@ static NSURL *gLastPlayedURL = nil;
     if (gHooksInitialized) return;
     gHooksInitialized = YES;
 
-    // 1. Ads (If Enabled)
+    // 1. Ads
     if ([[NSUserDefaults standardUserDefaults] boolForKey:kIFBlockAds]) {
         %init(AdBlocker);
     }

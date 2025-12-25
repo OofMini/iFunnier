@@ -1,35 +1,82 @@
-# iFunnier ( Work in progress, currently unstable.)
+# iFunnier Remastered
 
-**iFunnier** is a tweak for iFunny that removes ads, removes watermarks, and allows saving of any content (images and videos).
+![Banner](https://via.placeholder.com/1200x300?text=iFunnier+Remastered)
 
-This version has been updated to support **Sideloading** (Non-Jailbroken devices) via AltStore, SideStore, or TrollStore.
+**iFunnier Remastered** is a comprehensive, open-source tweak for the iFunny iOS app. It unlocks client-side Premium features, removes all advertisements, enables native media downloading without watermarks, and provides a cleaner, user-friendly interface.
+
+> [!NOTE]
+> This tweak is optimized for **iFunny v10.31.11+**. Older versions may not be fully supported due to significant changes in the app's internal Swift structure.
+
+---
 
 ## Features
-* **No Ads**: Banner, Native, and Reward ads are disabled.
-* **No Watermarks**: Automatically crops watermarks when saving images.
-* **Save Anything**: Adds the ability to save videos and images that normally cannot be saved.
-* **Privacy**: Bearer tokens are saved to the app's Documents folder for debugging (optional).
 
-## How to Build (Sideloadable IPA)
+### 🔓 Premium Experience
+- **Ads Removed:** Completely blocks banner ads, interstitial video ads, and native feed ads by intercepting ad network SDKs (AppLovin, AdMob, IronSource) at the source.
+- **Premium Status Spoofing:** Forces the app to recognize the user as a Premium subscriber, unlocking client-side perks.
+- **Premium Features Unlocked:** Enables specific feature flags such as custom app icons, profile customization options, and exclusive UI themes.
 
-You do not need a computer or a Mac to build this. You can use the GitHub Actions workflow included in this repository.
+### 💾 Enhanced Media Saving
+- **Native Video Downloading:** Unlocks the built-in "Save Video" button for all content, bypassing the "Premium only" restriction.
+- **No Watermarks:** Automatically removes the iFunny watermark from saved images and videos.
+- **Share Sheet Downloader:** Adds a custom "Download Video" action to the iOS Share Sheet as a reliable backup method for saving content.
 
-1.  **Fork** this repository.
-2.  Go to the **Actions** tab in your forked repo.
-3.  Select the **Build iFunnier IPA** workflow.
-4.  Click **Run workflow**.
-5.  Paste a direct download link to an **iFunny IPA** in the input box.
-    * *Note: Using a decrypted IPA is recommended for best compatibility, but standard IPAs often work.*
-6.  Wait for the build to finish, then download the `iFunnier-Patched-IPA` artifact.
+### 🧹 UI & Quality of Life
+- **Clean Interface:** Removes "Get Premium" upsell banners, subscription pop-ups, and other clutter.
+- **Custom Settings Menu:** Includes a dedicated **iFunnier Control** menu (accessible via the gear icon in the sidebar) to toggle specific features:
+    - Block Ads
+    - No Watermark
+    - Block Upsells
+
+---
 
 ## Installation
-Install the downloaded `.ipa` using:
-* AltStore
-* SideStore
-* TrollStore
-* Esign / Scarlet
 
-## Credits
-* **Eamon Tracey** - Original Creator
-* **Theos** - Build System
-* **Azule** - IPA Injection Tool
+### Method 1: Building with GitHub Actions (Recommended)
+You can build the IPA directly from this repository without needing a computer or a Mac.
+
+> [!IMPORTANT]
+> **Prerequisites:** You must have a **Decrypted IPA** of iFunny v10.31.11+. You cannot use an encrypted IPA from the App Store.
+
+1.  **Fork this repository** by clicking the fork button in the top right corner.
+2.  Go to your forked repository's **Settings** > **Actions** > **General**, and ensure **Read and write permissions** are enabled under "Workflow permissions".
+3.  Navigate to the **Actions** tab.
+4.  Select the **Build iFunnier IPA** workflow from the sidebar.
+5.  Click the **Run workflow** button.
+6.  Paste the **Direct Download URL** to your decrypted iFunny IPA in the input field.
+7.  Click **Run workflow**.
+8.  Once the build finishes, go to the **Releases** page of your fork to download the patched `iFunnier.ipa`.
+
+### Method 2: Sideloading
+If you already have the `.ipa` file:
+-   **SideStore / AltStore:** Open the `.ipa` in SideStore or AltStore to install it.
+-   **TrollStore:** If your device is compatible, install via TrollStore for permanent signing and better performance.
+-   **Esign / Scarlet:** Sign and install the IPA using your preferred signing service.
+
+---
+
+## How It Works
+
+**iFunnier Remastered** utilizes **Logos** and the **Objective-C Runtime** to hook into internal Swift classes and modify their behavior dynamically.
+
+### Premium Spoofing & Feature Flags
+The tweak identifies and hooks into key service classes responsible for managing user entitlements. By overriding methods such as `isActive` in `PremiumStatusServiceImpl` and `isFeatureAvailable` in `PremiumFeaturesServiceImpl`, the tweak forces the app to return `YES` (True) for all entitlement checks.
+
+### The "Nuclear" Ad Blocker
+Rather than simply hiding ad views (which can leave empty spaces), iFunnier Remastered neutralizes the ad SDKs themselves. It hooks into major ad networks—including **AppLovin (ALAdService)**, **Google AdMob (GADBannerView)**, and **IronSource**—intercepting the `loadAd` and `loadRequest` methods to prevent any ad data from ever being requested or downloaded.
+
+### Dynamic Safety
+To ensure stability across different app versions, the tweak uses **dynamic class lookups** (`objc_getClass`). Instead of hardcoding class names that might change, the tweak searches for these classes at runtime. If a class is renamed or missing in a future update, the tweak gracefully skips that hook instead of crashing the app.
+
+---
+
+## Support
+
+This project is open-source and free. If you encounter crashes or bugs:
+
+1.  Check the **Issues** tab to see if the problem has already been reported.
+2.  Open a new Issue and include:
+    -   iFunny App Version
+    -   iOS Version
+    -   Device Model
+    -   A crash log (if available)

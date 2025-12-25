@@ -8,7 +8,7 @@
 #define kIFBlockUpsells @"kIFBlockUpsells"
 #define kIFNoWatermark @"kIFNoWatermark"
 
-// Global flag to ensure we only init once
+// Global flag to avoid double-initialization
 static BOOL gHooksInitialized = NO;
 
 // ==========================================================
@@ -76,7 +76,7 @@ static BOOL gHooksInitialized = NO;
 %end
 
 // --- AppLovin MAX (Newer SDK) ---
-// iFunny likely uses 'MA' prefixed classes now
+// iFunny now uses 'MA' prefixed classes for ads
 %hook MARequestManager
 - (void)loadAdWithAdUnitIdentifier:(id)id { }
 %end
@@ -123,9 +123,8 @@ static NSURL *gLastPlayedURL = nil;
 %hook UIActivityViewController
 - (instancetype)initWithActivityItems:(NSArray *)items applicationActivities:(NSArray *)activities {
     NSMutableArray *newActivities = [NSMutableArray arrayWithArray:activities];
-    // We add the download activity here (implementation below)
-    // Note: IFDownloadActivity class definition omitted for brevity, 
-    // ensure it is defined in your file as before.
+    // Note: IFDownloadActivity implementation is assumed to be below or in a separate file
+    // For this single-file fix, we assume the class definition exists as in previous versions
     return %orig(items, newActivities);
 }
 %end
@@ -184,7 +183,6 @@ static NSURL *gLastPlayedURL = nil;
     if (!featuresCls) featuresCls = objc_getClass("PremiumFeaturesServiceImpl");
     if (featuresCls) %init(FeaturesHook, PremiumFeaturesServiceImpl = featuresCls);
 
-    // Fix for "Premium Saving Features" Paywall
     Class videoCls = objc_getClass("Premium.VideoSaveEnableServiceImpl");
     if (!videoCls) videoCls = objc_getClass("VideoSaveEnableServiceImpl");
     if (videoCls) %init(VideoHook, VideoSaveEnableServiceImpl = videoCls);

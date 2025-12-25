@@ -214,14 +214,13 @@ static Class FindSwiftClass(NSString *name) {
 %end
 
 // ==========================================================
-// 5. USER & SIDEBAR HOOKS (NEW!)
+// 5. USER & SIDEBAR HOOKS
 // ==========================================================
 %group UserHook
 %hook FNUser // Helper for User Model
 - (BOOL)isPremium { return YES; }
 - (BOOL)isPro { return YES; }
 - (BOOL)hasSubscription { return YES; }
-// Force the Sidebar Label
 - (NSString *)subscriptionStatusText { return @"Lifetime Subscription"; }
 - (NSString *)premiumStatusTitle { return @"Lifetime Premium"; }
 %end
@@ -242,7 +241,6 @@ static Class FindSwiftClass(NSString *name) {
 - (void)setIsVideoSaveEnabled:(BOOL)enabled { %orig(YES); }
 - (BOOL)canSaveVideo { return YES; }
 - (BOOL)shouldShowUpsell { return NO; }
-// Force No Watermark
 - (BOOL)isWatermarkRemovalEnabled { return YES; }
 + (instancetype)shared {
     id shared = %orig;
@@ -273,18 +271,21 @@ static Class FindSwiftClass(NSString *name) {
 %end
 
 // ==========================================================
-// 7. POPUP & AD KILLERS
+// 7. POPUP & AD KILLERS (Split for safety)
 // ==========================================================
-%group PopupKiller
-// Kill Feed Popup
+%group PopupKiller_Message
 %hook InAppMessageService
 - (BOOL)shouldShowMessage:(id)arg1 { return NO; }
 %end
+%end
 
+%group PopupKiller_Overlay
 %hook OverlayManager
 - (void)showOverlay:(id)arg1 { }
 %end
+%end
 
+%group PopupKiller_Offer
 %hook LimitedTimeOfferServiceImpl
 - (BOOL)shouldShowOffer { return NO; }
 - (BOOL)isEnabled { return NO; }
@@ -305,7 +306,6 @@ static Class FindSwiftClass(NSString *name) {
 - (BOOL)isEnabled { return YES; }
 - (BOOL)isFeatureAvailable:(NSInteger)f forPlan:(NSInteger)p { return YES; }
 - (BOOL)isFeatureAvailableForAnyPlan:(NSInteger)f { return YES; }
-// Fix for "No Watermark" specific feature flag
 - (BOOL)isFeatureEnabled:(NSInteger)f { return YES; }
 %end
 %end
@@ -506,12 +506,15 @@ static Class FindSwiftClass(NSString *name) {
     c = FindSwiftClass(@"VideoSaveEnableServiceImpl");
     if (c) %init(VideoHookStatic, VideoSaveEnableServiceImpl = c);
     
-    // Popups
+    // Popups (Split Groups)
     c = FindSwiftClass(@"LimitedTimeOfferServiceImpl");
-    if (c) %init(PopupKiller, LimitedTimeOfferServiceImpl = c);
-    // Try to find generic popup managers
+    if (c) %init(PopupKiller_Offer, LimitedTimeOfferServiceImpl = c);
+    
     Class msgSvc = objc_getClass("InAppMessageService"); 
-    if (msgSvc) %init(PopupKiller, InAppMessageService = msgSvc);
+    if (msgSvc) %init(PopupKiller_Message, InAppMessageService = msgSvc);
+    
+    Class overlay = objc_getClass("OverlayManager");
+    if (overlay) %init(PopupKiller_Overlay, OverlayManager = overlay);
     
     c = FindSwiftClass(@"PremiumPurchaseManagerImpl");
     if (c) %init(PurchaseHook, PremiumPurchaseManagerImpl = c);

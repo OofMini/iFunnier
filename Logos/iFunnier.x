@@ -2,21 +2,50 @@
 #import <AVFoundation/AVFoundation.h>
 #import <objc/runtime.h>
 #import <dlfcn.h>
+#import <os/log.h>
 
 // --- PREFERENCES ---
 #define kIFBlockAds @"kIFBlockAds"
 #define kIFBlockUpsells @"kIFBlockUpsells"
 #define kIFNoWatermark @"kIFNoWatermark"
 
-// Global flag
 static BOOL gHooksInitialized = NO;
 static NSURL *gLastPlayedURL = nil;
 
 // ==========================================================
-// 1. HELPER CLASSES
+// 1. HELPER: CLASS DUMPER (The Magic Tool)
 // ==========================================================
+static void DumpRelevantClasses() {
+    // This logs to the Console.app on Mac or sysdiagnose
+    NSLog(@"[iFunnier] === STARTING CLASS DUMP ===");
+    
+    unsigned int count = 0;
+    Class *classes = objc_copyClassList(&count);
+    
+    for (unsigned int i = 0; i < count; i++) {
+        const char *cName = class_getName(classes[i]);
+        if (!cName) continue;
+        
+        NSString *name = [NSString stringWithUTF8String:cName];
+        
+        // Filter for keywords related to our missing features
+        if ([name containsString:@"Premium"] || 
+            [name containsString:@"VideoSave"] || 
+            [name containsString:@"Offer"] || 
+            [name containsString:@"ViewModel"] || // CHECK FOR VIEWMODELS
+            [name containsString:@"RemoteConfig"] ||
+            [name containsString:@"Experiment"]) {
+            
+            NSLog(@"[iFunnier] FOUND CANDIDATE: %@", name);
+        }
+    }
+    free(classes);
+    NSLog(@"[iFunnier] === CLASS DUMP FINISHED ===");
+}
 
-// --- DOWNLOAD ACTIVITY (Video Saver) ---
+// ==========================================================
+// 2. HELPER CLASSES
+// ==========================================================
 @interface IFDownloadActivity : UIActivity @end
 @implementation IFDownloadActivity
 - (UIActivityType)activityType { return @"com.ifunnier.download"; }
@@ -38,9 +67,7 @@ static NSURL *gLastPlayedURL = nil;
 + (UIActivityCategory)activityCategory { return UIActivityCategoryAction; }
 @end
 
-// --- SETTINGS MENU CONTROLLER ---
 @interface iFunnierSettingsViewController : UITableViewController @end
-
 @implementation iFunnierSettingsViewController
 - (void)viewDidLoad {
     [super viewDidLoad];
@@ -55,42 +82,29 @@ static NSURL *gLastPlayedURL = nil;
 - (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
     UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:@"Cell" forIndexPath:indexPath];
     cell.selectionStyle = UITableViewCellSelectionStyleNone;
-    
     UISwitch *sw = [UISwitch new];
     sw.tag = indexPath.row;
     [sw addTarget:self action:@selector(t:) forControlEvents:UIControlEventValueChanged];
-    
-    NSString *txt = @"";
-    NSString *key = @"";
-    if (indexPath.row == 0) { txt = @"Block Ads"; key = @"kIFBlockAds"; }
-    else if (indexPath.row == 1) { txt = @"No Watermark"; key = @"kIFNoWatermark"; }
-    else if (indexPath.row == 2) { txt = @"Block Upsells"; key = @"kIFBlockUpsells"; }
-    
+    NSString *txt = (indexPath.row==0)?@"Block Ads":(indexPath.row==1)?@"No Watermark":@"Block Upsells";
+    NSString *key = (indexPath.row==0)?kIFBlockAds:(indexPath.row==1)?kIFNoWatermark:kIFBlockUpsells;
     cell.textLabel.text = txt;
     [sw setOn:[[NSUserDefaults standardUserDefaults] boolForKey:key] animated:NO];
     cell.accessoryView = sw;
     return cell;
 }
 - (void)t:(UISwitch *)s {
-    NSString *k = (s.tag==0)?@"kIFBlockAds":(s.tag==1)?@"kIFNoWatermark":@"kIFBlockUpsells";
+    NSString *k = (s.tag==0)?kIFBlockAds:(s.tag==1)?kIFNoWatermark:kIFBlockUpsells;
     [[NSUserDefaults standardUserDefaults] setBool:s.isOn forKey:k];
     [[NSUserDefaults standardUserDefaults] synchronize];
-    
-    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Restart Required" 
-                                                                   message:@"Changes will take effect after you restart iFunny." 
-                                                            preferredStyle:UIAlertControllerStyleAlert];
-    
-    [alert addAction:[UIAlertAction actionWithTitle:@"Later" style:UIAlertActionStyleCancel handler:nil]];
-    [alert addAction:[UIAlertAction actionWithTitle:@"Close App Now" style:UIAlertActionStyleDestructive handler:^(UIAlertAction *action) {
-        exit(0);
-    }]];
-    
-    [self presentViewController:alert animated:YES completion:nil];
+    UIAlertController *a = [UIAlertController alertControllerWithTitle:@"Restart Required" message:@"Restart iFunny to apply." preferredStyle:UIAlertControllerStyleAlert];
+    [a addAction:[UIAlertAction actionWithTitle:@"Close App Now" style:UIAlertActionStyleDestructive handler:^(UIAlertAction *action) { exit(0); }]];
+    [a addAction:[UIAlertAction actionWithTitle:@"Later" style:UIAlertActionStyleCancel handler:nil]];
+    [self presentViewController:a animated:YES completion:nil];
 }
 @end
 
 // ==========================================================
-// 2. SETTINGS BUTTON INJECTION
+// 3. SETTINGS MENU INJECTION
 // ==========================================================
 %group MenuHook
 %hook MenuViewController
@@ -98,45 +112,53 @@ static NSURL *gLastPlayedURL = nil;
     %orig;
     UIViewController *vc = (UIViewController *)self;
     if (vc.navigationItem.rightBarButtonItem && vc.navigationItem.rightBarButtonItem.tag == 999) return;
-    
-    UIBarButtonItem *settingsBtn = [[UIBarButtonItem alloc] initWithImage:[UIImage systemImageNamed:@"gear"] 
-                                                                    style:UIBarButtonItemStylePlain 
-                                                                   target:self 
-                                                                   action:@selector(openIFunnierSettings)];
-    settingsBtn.tag = 999;
-    vc.navigationItem.rightBarButtonItem = settingsBtn;
+    UIBarButtonItem *btn = [[UIBarButtonItem alloc] initWithImage:[UIImage systemImageNamed:@"gear"] style:UIBarButtonItemStylePlain target:self action:@selector(openSettings)];
+    btn.tag = 999;
+    vc.navigationItem.rightBarButtonItem = btn;
 }
 %new
-- (void)openIFunnierSettings {
-    iFunnierSettingsViewController *vc = [[iFunnierSettingsViewController alloc] initWithStyle:UITableViewStyleInsetGrouped];
-    UINavigationController *nav = [[UINavigationController alloc] initWithRootViewController:vc];
+- (void)openSettings {
+    UINavigationController *nav = [[UINavigationController alloc] initWithRootViewController:[[iFunnierSettingsViewController alloc] initWithStyle:UITableViewStyleInsetGrouped]];
     [(UIViewController *)self presentViewController:nav animated:YES completion:nil];
 }
 %end
 %end
 
 // ==========================================================
-// 3. PREMIUM HOOKS
+// 4. REMOTE CONFIG & EXPERIMENTS (New!)
 // ==========================================================
+%group RemoteConfigHook
+// Hook generic Remote Config to force-enable features
+%hook FIRRemoteConfig
+- (id)configValueForKey:(NSString *)key {
+    // If asking for anything premium/feature related, say YES
+    if ([key containsString:@"premium"] || [key containsString:@"video_save"] || [key containsString:@"watermark"]) {
+        // Return a dummy object that evaluates to boolean True
+        return [NSNumber numberWithBool:YES];
+    }
+    return %orig;
+}
+%end
+%end
 
-// --- Status ---
+// ==========================================================
+// 5. SERVICE HOOKS (Expanded)
+// ==========================================================
 %group StatusHook
 %hook PremiumStatusServiceImpl
 - (BOOL)isActive { return YES; }
 %end
 %end
 
-// --- Features ---
 %group FeaturesHook
 %hook PremiumFeaturesServiceImpl
 - (BOOL)isEnabled { return YES; }
-- (BOOL)isFeatureAvailable:(NSInteger)feature forPlan:(NSInteger)plan { return YES; }
-- (BOOL)isFeatureAvailableForAnyPlan:(NSInteger)feature { return YES; }
-- (BOOL)isEntryPointEnabled:(NSInteger)entryPoint { return YES; }
+- (BOOL)isFeatureAvailable:(NSInteger)f forPlan:(NSInteger)p { return YES; }
+- (BOOL)isFeatureAvailableForAnyPlan:(NSInteger)f { return YES; }
+- (BOOL)isEntryPointEnabled:(NSInteger)e { return YES; }
 %end
 %end
 
-// --- Video Saver (Fixes Lock Icon) ---
 %group VideoHook
 %hook VideoSaveEnableServiceImpl
 - (BOOL)isEnabled { return YES; }
@@ -146,7 +168,6 @@ static NSURL *gLastPlayedURL = nil;
 %end
 %end
 
-// --- Offer Popup (Fixes Feed Popup) ---
 %group OfferHook
 %hook LimitedTimeOfferServiceImpl
 - (BOOL)shouldShowOffer { return NO; }
@@ -154,16 +175,14 @@ static NSURL *gLastPlayedURL = nil;
 %end
 %end
 
-// --- Purchase Manager ---
 %group PurchaseHook
 %hook PremiumPurchaseManagerImpl
 - (BOOL)hasActiveSubscription { return YES; }
 - (BOOL)isSubscriptionActive { return YES; }
-- (id)activeSubscription { return nil; } // Safety fix
+- (id)activeSubscription { return nil; }
 %end
 %end
 
-// --- App Icons ---
 %group IconsHook
 %hook PremiumAppIconsServiceImpl
 - (BOOL)canChangeAppIcon { return YES; }
@@ -172,21 +191,18 @@ static NSURL *gLastPlayedURL = nil;
 %end
 
 // ==========================================================
-// 4. NUCLEAR AD BLOCKER
+// 6. AD BLOCKER
 // ==========================================================
 %group AdBlocker
-
 %hook ALAdService
 - (void)loadNextAd:(id)a andNotify:(id)b { }
 %end
-
 %hook MARequestManager
 - (void)loadAdWithAdUnitIdentifier:(id)id { }
 %end
 %hook MAAdLoader
 - (void)loadAd:(id)ad { }
 %end
-
 %hook GADBannerView
 - (void)loadRequest:(id)arg1 { }
 %end
@@ -196,25 +212,22 @@ static NSURL *gLastPlayedURL = nil;
 %hook GADMobileAds
 - (void)startWithCompletionHandler:(id)arg1 { }
 %end
-
 %hook ISNativeAd
 - (void)loadAd { }
 %end
 %hook IronSource
 + (void)initWithAppKey:(id)arg1 { }
 %end
-
 %hook PAGBannerAd
 - (void)loadAd:(id)a { }
 %end
 %hook PAGNativeAd
 - (void)loadAd:(id)a { }
 %end
-
 %end
 
 // ==========================================================
-// 5. VIDEO SAVER BACKUP
+// 7. BACKUP VIDEO SAVER
 // ==========================================================
 %group BackupVideo
 %hook AVPlayer
@@ -231,7 +244,6 @@ static NSURL *gLastPlayedURL = nil;
     }
 }
 %end
-
 %hook UIActivityViewController
 - (instancetype)initWithActivityItems:(NSArray *)items applicationActivities:(NSArray *)activities {
     NSMutableArray *newActivities = [NSMutableArray arrayWithArray:activities];
@@ -241,28 +253,33 @@ static NSURL *gLastPlayedURL = nil;
 %end
 %end
 
-
 // ==========================================================
-// 6. ROBUST INITIALIZATION (The Final Fix)
+// 8. ROBUST INITIALIZATION
 // ==========================================================
-
-// Helper to find Swift classes by Name, Module, or Mangled Name
-static Class FindSwiftClass(NSString *name, NSString *mangledName) {
-    // 1. Try clean name
+static Class FindSwiftClass(NSString *name) {
+    // 1. Try Clean Name
     Class cls = objc_getClass([name UTF8String]);
     if (cls) return cls;
     
-    // 2. Try Module.Name
-    NSString *moduleName = [@"Premium." stringByAppendingString:name];
-    cls = objc_getClass([moduleName UTF8String]);
-    if (cls) return cls;
-    
-    // 3. Try Mangled Name (Most reliable for Swift)
-    if (mangledName) {
-        cls = objc_getClass([mangledName UTF8String]);
-        if (cls) return cls;
+    // 2. Try Modules: Premium, iFunny, iFunnyApp, Core
+    NSArray *modules = @[@"Premium", @"iFunny", @"iFunnyApp", @"Core"];
+    for (NSString *module in modules) {
+        NSString *fullName = [NSString stringWithFormat:@"%@.%@", module, name];
+        cls = objc_getClass([fullName UTF8String]);
+        if (cls) {
+            NSLog(@"[iFunnier] Hooked: %@", fullName);
+            return cls;
+        }
     }
     
+    // 3. Try Common Mangled Prefixes (Swift 5+)
+    // _TtC + Length(module) + Module + Length(name) + Name
+    // This is hard to guess perfectly, but we try the most common "Premium" one
+    // _TtC7Premium + Length + Name
+    NSString *mangled = [NSString stringWithFormat:@"_TtC7Premium%lu%@", (unsigned long)name.length, name];
+    cls = objc_getClass([mangled UTF8String]);
+    if (cls) return cls;
+
     return nil;
 }
 
@@ -270,43 +287,41 @@ static Class FindSwiftClass(NSString *name, NSString *mangledName) {
 %hook UIApplication
 - (void)didFinishLaunching {
     %orig;
-    
     if (gHooksInitialized) return;
     gHooksInitialized = YES;
 
-    // 1. Ads & Backup
+    // RUN THE CLASS DUMPER
+    // Look at your Console/Syslog to see the output!
+    DumpRelevantClasses();
+
     if ([[NSUserDefaults standardUserDefaults] boolForKey:kIFBlockAds]) {
         %init(AdBlocker);
     }
     %init(BackupVideo);
 
-    // 2. Initialize Hooks with Mangled Name Fallbacks
-    
-    // Status
-    Class statusCls = FindSwiftClass(@"PremiumStatusServiceImpl", @"_TtC7Premium24PremiumStatusServiceImpl");
+    // Try to hook Services with expanded search
+    Class statusCls = FindSwiftClass(@"PremiumStatusServiceImpl");
     if (statusCls) %init(StatusHook, PremiumStatusServiceImpl = statusCls);
 
-    // Features
-    Class featuresCls = FindSwiftClass(@"PremiumFeaturesServiceImpl", @"_TtC7Premium26PremiumFeaturesServiceImpl");
+    Class featuresCls = FindSwiftClass(@"PremiumFeaturesServiceImpl");
     if (featuresCls) %init(FeaturesHook, PremiumFeaturesServiceImpl = featuresCls);
 
-    // Video Saver (Fixes Lock Icon)
-    Class videoCls = FindSwiftClass(@"VideoSaveEnableServiceImpl", @"_TtC7Premium26VideoSaveEnableServiceImpl");
+    Class videoCls = FindSwiftClass(@"VideoSaveEnableServiceImpl");
     if (videoCls) %init(VideoHook, VideoSaveEnableServiceImpl = videoCls);
     
-    // Offer Popup (Fixes Feed Popup)
-    Class offerCls = FindSwiftClass(@"LimitedTimeOfferServiceImpl", @"_TtC7Premium29LimitedTimeOfferServiceImpl");
+    Class offerCls = FindSwiftClass(@"LimitedTimeOfferServiceImpl");
     if (offerCls) %init(OfferHook, LimitedTimeOfferServiceImpl = offerCls);
 
-    // Purchase
-    Class purchaseCls = FindSwiftClass(@"PremiumPurchaseManagerImpl", @"_TtC7Premium26PremiumPurchaseManagerImpl");
+    Class purchaseCls = FindSwiftClass(@"PremiumPurchaseManagerImpl");
     if (purchaseCls) %init(PurchaseHook, PremiumPurchaseManagerImpl = purchaseCls);
 
-    // Icons
-    Class iconsCls = FindSwiftClass(@"PremiumAppIconsServiceImpl", @"_TtC7Premium26PremiumAppIconsServiceImpl");
+    Class iconsCls = FindSwiftClass(@"PremiumAppIconsServiceImpl");
     if (iconsCls) %init(IconsHook, PremiumAppIconsServiceImpl = iconsCls);
 
-    // Menu
+    // Try to hook Remote Config (Google/Firebase)
+    Class remoteConfigCls = objc_getClass("FIRRemoteConfig");
+    if (remoteConfigCls) %init(RemoteConfigHook, FIRRemoteConfig = remoteConfigCls);
+
     Class menuCls = objc_getClass("Menu.MenuViewController");
     if (!menuCls) menuCls = objc_getClass("MenuViewController");
     if (menuCls) %init(MenuHook, MenuViewController = menuCls);

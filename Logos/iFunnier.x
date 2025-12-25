@@ -217,7 +217,7 @@ static Class FindSwiftClass(NSString *name) {
 // 5. USER & SIDEBAR HOOKS
 // ==========================================================
 %group UserHook
-%hook FNUser // Helper for User Model
+%hook FNUser
 - (BOOL)isPremium { return YES; }
 - (BOOL)isPro { return YES; }
 - (BOOL)hasSubscription { return YES; }
@@ -335,8 +335,12 @@ static Class FindSwiftClass(NSString *name) {
 %end
 
 // ==========================================================
-// 9. AD BLOCKER
+// 9. AD BLOCKER (FIXED)
 // ==========================================================
+// Define the class interface so 'hidden' and 'alpha' work
+@interface FNFeedNativeAdCell : UICollectionViewCell
+@end
+
 %group AdBlocker
 %hook ALAdService
 - (void)loadNextAd:(id)a andNotify:(id)b { }
@@ -362,7 +366,7 @@ static Class FindSwiftClass(NSString *name) {
 %hook PAGNativeAd
 - (void)loadAd:(id)a { }
 %end
-// Block Native Feed Ads
+// FIXED: Compiler now knows FNFeedNativeAdCell is a view
 %hook FNFeedNativeAdCell
 - (void)layoutSubviews {
     self.hidden = YES; 

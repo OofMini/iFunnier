@@ -64,11 +64,8 @@ static NSURL *gLastPlayedURL = nil;
     self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemDone target:self action:@selector(close)];
 }
 - (void)close { [self dismissViewControllerAnimated:YES completion:nil]; }
-
-// FIXED: Removed duplicate declaration here
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView { return 1; }
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section { return 3; }
-
 - (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
     UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:@"Cell" forIndexPath:indexPath];
     cell.selectionStyle = UITableViewCellSelectionStyleNone;
@@ -117,7 +114,7 @@ static Class FindSwiftClass(NSString *name) {
     Class cls = objc_getClass([name UTF8String]);
     
     if (!cls) {
-        NSArray *modules = @[@"Premium", @"iFunny", @"iFunnyApp", @"Core"];
+        NSArray *modules = @[@"Premium", @"iFunny", @"iFunnyApp", @"Core", @"libiFunny", @"User"];
         for (NSString *module in modules) {
             NSString *full = [NSString stringWithFormat:@"%@.%@", module, name];
             cls = objc_getClass([full UTF8String]);
@@ -149,7 +146,8 @@ static Class FindSwiftClass(NSString *name) {
         
         NSDictionary *fake = @{
             @"is_premium": @YES, @"subscription_active": @YES,
-            @"video_save_enabled": @YES, @"no_ads": @YES
+            @"video_save_enabled": @YES, @"no_ads": @YES,
+            @"watermark_removal": @YES
         };
         NSData *data = [NSJSONSerialization dataWithJSONObject:fake options:0 error:nil];
         NSHTTPURLResponse *resp = [[NSHTTPURLResponse alloc] initWithURL:request.URL statusCode:200 HTTPVersion:@"HTTP/1.1" headerFields:nil];
@@ -165,10 +163,8 @@ static Class FindSwiftClass(NSString *name) {
 %end
 
 // ==========================================================
-// 4. MENU HOOKS (Split for duplicate init fix)
+// 4. MENU HOOKS
 // ==========================================================
-
-// Define the logic once via copy-paste to avoid macros with %new which can be buggy
 %group MenuHookStatic
 %hook MenuViewController
 - (void)viewDidAppear:(BOOL)animated {
@@ -218,16 +214,36 @@ static Class FindSwiftClass(NSString *name) {
 %end
 
 // ==========================================================
-// 5. VIDEO SAVER HOOKS (Split for duplicate init fix)
+// 5. USER & SIDEBAR HOOKS (NEW!)
 // ==========================================================
+%group UserHook
+%hook FNUser // Helper for User Model
+- (BOOL)isPremium { return YES; }
+- (BOOL)isPro { return YES; }
+- (BOOL)hasSubscription { return YES; }
+// Force the Sidebar Label
+- (NSString *)subscriptionStatusText { return @"Lifetime Subscription"; }
+- (NSString *)premiumStatusTitle { return @"Lifetime Premium"; }
+%end
 
-// Static Group (for ctor)
+%hook UserProfile
+- (BOOL)isPremium { return YES; }
+- (NSString *)subscriptionTitle { return @"Lifetime"; }
+%end
+%end
+
+// ==========================================================
+// 6. VIDEO SAVER HOOKS
+// ==========================================================
 %group VideoHookStatic
 %hook VideoSaveEnableServiceImpl
 - (BOOL)isEnabled { return YES; }
 - (BOOL)isVideoSaveEnabled { return YES; }
 - (void)setIsVideoSaveEnabled:(BOOL)enabled { %orig(YES); }
+- (BOOL)canSaveVideo { return YES; }
 - (BOOL)shouldShowUpsell { return NO; }
+// Force No Watermark
+- (BOOL)isWatermarkRemovalEnabled { return YES; }
 + (instancetype)shared {
     id shared = %orig;
     if ([shared respondsToSelector:@selector(setIsVideoSaveEnabled:)]) {
@@ -238,13 +254,14 @@ static Class FindSwiftClass(NSString *name) {
 %end
 %end
 
-// Dynamic Group (for Ghost Hook)
 %group VideoHookDynamic
 %hook VideoSaveEnableServiceImpl
 - (BOOL)isEnabled { return YES; }
 - (BOOL)isVideoSaveEnabled { return YES; }
 - (void)setIsVideoSaveEnabled:(BOOL)enabled { %orig(YES); }
+- (BOOL)canSaveVideo { return YES; }
 - (BOOL)shouldShowUpsell { return NO; }
+- (BOOL)isWatermarkRemovalEnabled { return YES; }
 + (instancetype)shared {
     id shared = %orig;
     if ([shared respondsToSelector:@selector(setIsVideoSaveEnabled:)]) {
@@ -256,7 +273,26 @@ static Class FindSwiftClass(NSString *name) {
 %end
 
 // ==========================================================
-// 6. OTHER SERVICE HOOKS
+// 7. POPUP & AD KILLERS
+// ==========================================================
+%group PopupKiller
+// Kill Feed Popup
+%hook InAppMessageService
+- (BOOL)shouldShowMessage:(id)arg1 { return NO; }
+%end
+
+%hook OverlayManager
+- (void)showOverlay:(id)arg1 { }
+%end
+
+%hook LimitedTimeOfferServiceImpl
+- (BOOL)shouldShowOffer { return NO; }
+- (BOOL)isEnabled { return NO; }
+%end
+%end
+
+// ==========================================================
+// 8. OTHER SERVICE HOOKS
 // ==========================================================
 %group StatusHook
 %hook PremiumStatusServiceImpl
@@ -269,13 +305,8 @@ static Class FindSwiftClass(NSString *name) {
 - (BOOL)isEnabled { return YES; }
 - (BOOL)isFeatureAvailable:(NSInteger)f forPlan:(NSInteger)p { return YES; }
 - (BOOL)isFeatureAvailableForAnyPlan:(NSInteger)f { return YES; }
-%end
-%end
-
-%group OfferHook
-%hook LimitedTimeOfferServiceImpl
-- (BOOL)shouldShowOffer { return NO; }
-- (BOOL)isEnabled { return NO; }
+// Fix for "No Watermark" specific feature flag
+- (BOOL)isFeatureEnabled:(NSInteger)f { return YES; }
 %end
 %end
 
@@ -304,21 +335,7 @@ static Class FindSwiftClass(NSString *name) {
 %end
 
 // ==========================================================
-// 7. REMOTE CONFIG HOOK
-// ==========================================================
-%group RemoteConfigHook
-%hook FIRRemoteConfig
-- (id)configValueForKey:(NSString *)key {
-    if ([key containsString:@"premium"] || [key containsString:@"video"] || [key containsString:@"save"]) {
-        return [NSNumber numberWithBool:YES];
-    }
-    return %orig;
-}
-%end
-%end
-
-// ==========================================================
-// 8. AD BLOCKER
+// 9. AD BLOCKER
 // ==========================================================
 %group AdBlocker
 %hook ALAdService
@@ -345,10 +362,17 @@ static Class FindSwiftClass(NSString *name) {
 %hook PAGNativeAd
 - (void)loadAd:(id)a { }
 %end
+// Block Native Feed Ads
+%hook FNFeedNativeAdCell
+- (void)layoutSubviews {
+    self.hidden = YES; 
+    self.alpha = 0;
+}
+%end
 %end
 
 // ==========================================================
-// 9. TARGETED UI HOOKS
+// 10. TARGETED UI HOOKS
 // ==========================================================
 %group UIHacks
 %hook UIButton
@@ -356,13 +380,19 @@ static Class FindSwiftClass(NSString *name) {
     %orig;
     if (!self.superview) return;
     
-    NSString *txt = self.currentTitle;
-    if ((txt && [txt containsString:@"Save"]) || [self.accessibilityIdentifier containsString:@"save"]) {
+    // Unhide Save/Share buttons
+    if ([self.accessibilityIdentifier containsString:@"save"] || [self.accessibilityIdentifier containsString:@"share"]) {
         self.enabled = YES;
         self.userInteractionEnabled = YES;
         self.alpha = 1.0;
         
+        // Aggressive Lock Removal
         for (UIView *subview in self.subviews) {
+            // Check Accessibility ID
+            if ([[subview accessibilityIdentifier] containsString:@"lock"]) {
+                subview.hidden = YES;
+            }
+            // Check Image Name
             if ([subview isKindOfClass:[UIImageView class]]) {
                 UIImageView *img = (UIImageView *)subview;
                 if ([[img.image accessibilityIdentifier] containsString:@"lock"]) {
@@ -376,7 +406,7 @@ static Class FindSwiftClass(NSString *name) {
 %end
 
 // ==========================================================
-// 10. JAILBREAK BYPASS
+// 11. JAILBREAK BYPASS
 // ==========================================================
 %group JBDectionBypass
 %hook NSFileManager
@@ -394,7 +424,7 @@ static Class FindSwiftClass(NSString *name) {
 %end
 
 // ==========================================================
-// 11. SHARE SHEET
+// 12. SHARE SHEET
 // ==========================================================
 %group BackupVideo
 %hook AVPlayer
@@ -427,7 +457,7 @@ static Class FindSwiftClass(NSString *name) {
 %end
 
 // ==========================================================
-// 12. GHOST HOOK
+// 13. GHOST HOOK
 // ==========================================================
 %group GhostClassHook
 %hook NSObject
@@ -472,12 +502,16 @@ static Class FindSwiftClass(NSString *name) {
     c = FindSwiftClass(@"PremiumFeaturesServiceImpl");
     if (c) %init(FeaturesHook, PremiumFeaturesServiceImpl = c);
     
-    // Use Static Group
+    // Video Saver
     c = FindSwiftClass(@"VideoSaveEnableServiceImpl");
     if (c) %init(VideoHookStatic, VideoSaveEnableServiceImpl = c);
     
+    // Popups
     c = FindSwiftClass(@"LimitedTimeOfferServiceImpl");
-    if (c) %init(OfferHook, LimitedTimeOfferServiceImpl = c);
+    if (c) %init(PopupKiller, LimitedTimeOfferServiceImpl = c);
+    // Try to find generic popup managers
+    Class msgSvc = objc_getClass("InAppMessageService"); 
+    if (msgSvc) %init(PopupKiller, InAppMessageService = msgSvc);
     
     c = FindSwiftClass(@"PremiumPurchaseManagerImpl");
     if (c) %init(PurchaseHook, PremiumPurchaseManagerImpl = c);
@@ -485,7 +519,11 @@ static Class FindSwiftClass(NSString *name) {
     c = FindSwiftClass(@"PremiumAppIconsServiceImpl");
     if (c) %init(IconsHook, PremiumAppIconsServiceImpl = c);
     
-    // Use Static Group
+    // User / Sidebar
+    Class userCls = FindSwiftClass(@"FNUser");
+    if (userCls) %init(UserHook, FNUser = userCls);
+    
+    // Menu
     c = FindSwiftClass(@"MenuViewController");
     if (!c) c = objc_getClass("MenuViewController");
     if (c) %init(MenuHookStatic, MenuViewController = c);

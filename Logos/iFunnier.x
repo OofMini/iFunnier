@@ -191,7 +191,6 @@ static Class FindSwiftClass(NSString *name) {
 %end
 %end
 
-// Dynamic copy for Ghost Class Hook
 %group MenuHookDynamic
 %hook MenuViewController
 - (void)viewDidAppear:(BOOL)animated {
@@ -303,7 +302,21 @@ static Class FindSwiftClass(NSString *name) {
 %end
 
 // ==========================================================
-// 7. AD BLOCKER
+// 7. REMOTE CONFIG HOOK (The Missing Piece)
+// ==========================================================
+%group RemoteConfigHook
+%hook FIRRemoteConfig
+- (id)configValueForKey:(NSString *)key {
+    if ([key containsString:@"premium"] || [key containsString:@"video"] || [key containsString:@"save"]) {
+        return [NSNumber numberWithBool:YES];
+    }
+    return %orig;
+}
+%end
+%end
+
+// ==========================================================
+// 8. AD BLOCKER
 // ==========================================================
 %group AdBlocker
 %hook ALAdService
@@ -333,7 +346,7 @@ static Class FindSwiftClass(NSString *name) {
 %end
 
 // ==========================================================
-// 8. TARGETED UI HOOKS
+// 9. TARGETED UI HOOKS
 // ==========================================================
 %group UIHacks
 %hook UIButton
@@ -361,7 +374,7 @@ static Class FindSwiftClass(NSString *name) {
 %end
 
 // ==========================================================
-// 9. JAILBREAK BYPASS
+// 10. JAILBREAK BYPASS
 // ==========================================================
 %group JBDectionBypass
 %hook NSFileManager
@@ -379,7 +392,7 @@ static Class FindSwiftClass(NSString *name) {
 %end
 
 // ==========================================================
-// 10. SHARE SHEET
+// 11. SHARE SHEET
 // ==========================================================
 %group BackupVideo
 %hook AVPlayer
@@ -412,7 +425,7 @@ static Class FindSwiftClass(NSString *name) {
 %end
 
 // ==========================================================
-// 11. GHOST HOOK (Uses Dynamic Groups)
+// 12. GHOST HOOK
 // ==========================================================
 %group GhostClassHook
 %hook NSObject
@@ -421,7 +434,6 @@ static Class FindSwiftClass(NSString *name) {
     const char *cName = class_getName(self);
     if (!cName || cName[0] != '_' || !strstr(cName, "Premium")) return;
     
-    // Use Dynamic Groups here
     if (strstr(cName, "VideoSaveEnableServiceImpl")) {
         IFLog("Ghost Caught: %s", cName);
         %init(VideoHookDynamic, VideoSaveEnableServiceImpl = self);
@@ -448,7 +460,7 @@ static Class FindSwiftClass(NSString *name) {
     
     if ([d boolForKey:kIFBlockAds]) %init(AdBlocker);
 
-    // Initialization Logic using Static Groups
+    // Initialization Logic
     
     Class c;
     
@@ -476,6 +488,7 @@ static Class FindSwiftClass(NSString *name) {
     if (!c) c = objc_getClass("MenuViewController");
     if (c) %init(MenuHookStatic, MenuViewController = c);
     
+    // Remote Config
     Class rc = objc_getClass("FIRRemoteConfig");
     if (rc) %init(RemoteConfigHook, FIRRemoteConfig = rc);
     

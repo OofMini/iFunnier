@@ -8,12 +8,12 @@
 #define kIFBlockUpsells @"kIFBlockUpsells"
 #define kIFNoWatermark @"kIFNoWatermark"
 
-// --- GLOBAL VARIABLES ---
+// Global flag
 static BOOL gHooksInitialized = NO;
-static NSURL *gLastPlayedURL = nil; // Moved to top so everyone can see it
+static NSURL *gLastPlayedURL = nil;
 
 // ==========================================================
-// 1. HELPER CLASSES (Must be defined first)
+// 1. HELPER CLASSES
 // ==========================================================
 
 // --- DOWNLOAD ACTIVITY (Video Saver) ---
@@ -76,14 +76,13 @@ static NSURL *gLastPlayedURL = nil; // Moved to top so everyone can see it
     [[NSUserDefaults standardUserDefaults] setBool:s.isOn forKey:k];
     [[NSUserDefaults standardUserDefaults] synchronize];
     
-    // UX Optimization: Offer to close the app immediately
     UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Restart Required" 
                                                                    message:@"Changes will take effect after you restart iFunny." 
                                                             preferredStyle:UIAlertControllerStyleAlert];
     
     [alert addAction:[UIAlertAction actionWithTitle:@"Later" style:UIAlertActionStyleCancel handler:nil]];
     [alert addAction:[UIAlertAction actionWithTitle:@"Close App Now" style:UIAlertActionStyleDestructive handler:^(UIAlertAction *action) {
-        exit(0); // Force close the app for user convenience
+        exit(0);
     }]];
     
     [self presentViewController:alert animated:YES completion:nil];
@@ -117,17 +116,17 @@ static NSURL *gLastPlayedURL = nil; // Moved to top so everyone can see it
 %end
 
 // ==========================================================
-// 3. PREMIUM STATUS
+// 3. PREMIUM HOOKS
 // ==========================================================
+
+// --- Status ---
 %group StatusHook
 %hook PremiumStatusServiceImpl
 - (BOOL)isActive { return YES; }
 %end
 %end
 
-// ==========================================================
-// 4. PREMIUM FEATURES
-// ==========================================================
+// --- Features ---
 %group FeaturesHook
 %hook PremiumFeaturesServiceImpl
 - (BOOL)isEnabled { return YES; }
@@ -137,9 +136,7 @@ static NSURL *gLastPlayedURL = nil; // Moved to top so everyone can see it
 %end
 %end
 
-// ==========================================================
-// 5. VIDEO SAVER (Native Button)
-// ==========================================================
+// --- Video Saver (Fixes Lock Icon) ---
 %group VideoHook
 %hook VideoSaveEnableServiceImpl
 - (BOOL)isEnabled { return YES; }
@@ -149,20 +146,24 @@ static NSURL *gLastPlayedURL = nil; // Moved to top so everyone can see it
 %end
 %end
 
-// ==========================================================
-// 6. PURCHASE MANAGER
-// ==========================================================
+// --- Offer Popup (Fixes Feed Popup) ---
+%group OfferHook
+%hook LimitedTimeOfferServiceImpl
+- (BOOL)shouldShowOffer { return NO; }
+- (BOOL)isEnabled { return NO; }
+%end
+%end
+
+// --- Purchase Manager ---
 %group PurchaseHook
 %hook PremiumPurchaseManagerImpl
 - (BOOL)hasActiveSubscription { return YES; }
 - (BOOL)isSubscriptionActive { return YES; }
-- (id)activeSubscription { return nil; } 
+- (id)activeSubscription { return nil; } // Safety fix
 %end
 %end
 
-// ==========================================================
-// 7. APP ICONS
-// ==========================================================
+// --- App Icons ---
 %group IconsHook
 %hook PremiumAppIconsServiceImpl
 - (BOOL)canChangeAppIcon { return YES; }
@@ -171,16 +172,14 @@ static NSURL *gLastPlayedURL = nil; // Moved to top so everyone can see it
 %end
 
 // ==========================================================
-// 8. NUCLEAR AD BLOCKER
+// 4. NUCLEAR AD BLOCKER
 // ==========================================================
 %group AdBlocker
 
-// AppLovin
 %hook ALAdService
 - (void)loadNextAd:(id)a andNotify:(id)b { }
 %end
 
-// AppLovin MAX
 %hook MARequestManager
 - (void)loadAdWithAdUnitIdentifier:(id)id { }
 %end
@@ -188,7 +187,6 @@ static NSURL *gLastPlayedURL = nil; // Moved to top so everyone can see it
 - (void)loadAd:(id)ad { }
 %end
 
-// Google AdMob
 %hook GADBannerView
 - (void)loadRequest:(id)arg1 { }
 %end
@@ -199,7 +197,6 @@ static NSURL *gLastPlayedURL = nil; // Moved to top so everyone can see it
 - (void)startWithCompletionHandler:(id)arg1 { }
 %end
 
-// IronSource
 %hook ISNativeAd
 - (void)loadAd { }
 %end
@@ -207,7 +204,6 @@ static NSURL *gLastPlayedURL = nil; // Moved to top so everyone can see it
 + (void)initWithAppKey:(id)arg1 { }
 %end
 
-// Pangle
 %hook PAGBannerAd
 - (void)loadAd:(id)a { }
 %end
@@ -218,7 +214,7 @@ static NSURL *gLastPlayedURL = nil; // Moved to top so everyone can see it
 %end
 
 // ==========================================================
-// 9. VIDEO SAVER BACKUP (Share Sheet)
+// 5. VIDEO SAVER BACKUP
 // ==========================================================
 %group BackupVideo
 %hook AVPlayer
@@ -239,7 +235,6 @@ static NSURL *gLastPlayedURL = nil; // Moved to top so everyone can see it
 %hook UIActivityViewController
 - (instancetype)initWithActivityItems:(NSArray *)items applicationActivities:(NSArray *)activities {
     NSMutableArray *newActivities = [NSMutableArray arrayWithArray:activities];
-    // Now IFDownloadActivity is defined above, so this will work!
     [newActivities addObject:[[IFDownloadActivity alloc] init]];
     return %orig(items, newActivities);
 }
@@ -248,8 +243,29 @@ static NSURL *gLastPlayedURL = nil; // Moved to top so everyone can see it
 
 
 // ==========================================================
-// 10. CENTRALIZED INITIALIZATION
+// 6. ROBUST INITIALIZATION (The Final Fix)
 // ==========================================================
+
+// Helper to find Swift classes by Name, Module, or Mangled Name
+static Class FindSwiftClass(NSString *name, NSString *mangledName) {
+    // 1. Try clean name
+    Class cls = objc_getClass([name UTF8String]);
+    if (cls) return cls;
+    
+    // 2. Try Module.Name
+    NSString *moduleName = [@"Premium." stringByAppendingString:name];
+    cls = objc_getClass([moduleName UTF8String]);
+    if (cls) return cls;
+    
+    // 3. Try Mangled Name (Most reliable for Swift)
+    if (mangledName) {
+        cls = objc_getClass([mangledName UTF8String]);
+        if (cls) return cls;
+    }
+    
+    return nil;
+}
+
 %group AppLifecycle
 %hook UIApplication
 - (void)didFinishLaunching {
@@ -258,36 +274,39 @@ static NSURL *gLastPlayedURL = nil; // Moved to top so everyone can see it
     if (gHooksInitialized) return;
     gHooksInitialized = YES;
 
-    // 1. Ads
+    // 1. Ads & Backup
     if ([[NSUserDefaults standardUserDefaults] boolForKey:kIFBlockAds]) {
         %init(AdBlocker);
     }
-    
-    // 2. Backup Video
     %init(BackupVideo);
 
-    // 3. Dynamic Class Loading
-    Class statusCls = objc_getClass("Premium.PremiumStatusServiceImpl");
-    if (!statusCls) statusCls = objc_getClass("PremiumStatusServiceImpl");
+    // 2. Initialize Hooks with Mangled Name Fallbacks
+    
+    // Status
+    Class statusCls = FindSwiftClass(@"PremiumStatusServiceImpl", @"_TtC7Premium24PremiumStatusServiceImpl");
     if (statusCls) %init(StatusHook, PremiumStatusServiceImpl = statusCls);
 
-    Class featuresCls = objc_getClass("Premium.PremiumFeaturesServiceImpl");
-    if (!featuresCls) featuresCls = objc_getClass("PremiumFeaturesServiceImpl");
+    // Features
+    Class featuresCls = FindSwiftClass(@"PremiumFeaturesServiceImpl", @"_TtC7Premium26PremiumFeaturesServiceImpl");
     if (featuresCls) %init(FeaturesHook, PremiumFeaturesServiceImpl = featuresCls);
 
-    Class videoCls = objc_getClass("Premium.VideoSaveEnableServiceImpl");
-    if (!videoCls) videoCls = objc_getClass("VideoSaveEnableServiceImpl");
+    // Video Saver (Fixes Lock Icon)
+    Class videoCls = FindSwiftClass(@"VideoSaveEnableServiceImpl", @"_TtC7Premium26VideoSaveEnableServiceImpl");
     if (videoCls) %init(VideoHook, VideoSaveEnableServiceImpl = videoCls);
+    
+    // Offer Popup (Fixes Feed Popup)
+    Class offerCls = FindSwiftClass(@"LimitedTimeOfferServiceImpl", @"_TtC7Premium29LimitedTimeOfferServiceImpl");
+    if (offerCls) %init(OfferHook, LimitedTimeOfferServiceImpl = offerCls);
 
-    Class purchaseCls = objc_getClass("Premium.PremiumPurchaseManagerImpl");
-    if (!purchaseCls) purchaseCls = objc_getClass("PremiumPurchaseManagerImpl");
+    // Purchase
+    Class purchaseCls = FindSwiftClass(@"PremiumPurchaseManagerImpl", @"_TtC7Premium26PremiumPurchaseManagerImpl");
     if (purchaseCls) %init(PurchaseHook, PremiumPurchaseManagerImpl = purchaseCls);
 
-    Class iconsCls = objc_getClass("Premium.PremiumAppIconsServiceImpl");
-    if (!iconsCls) iconsCls = objc_getClass("PremiumAppIconsServiceImpl");
+    // Icons
+    Class iconsCls = FindSwiftClass(@"PremiumAppIconsServiceImpl", @"_TtC7Premium26PremiumAppIconsServiceImpl");
     if (iconsCls) %init(IconsHook, PremiumAppIconsServiceImpl = iconsCls);
 
-    // 4. Settings Menu
+    // Menu
     Class menuCls = objc_getClass("Menu.MenuViewController");
     if (!menuCls) menuCls = objc_getClass("MenuViewController");
     if (menuCls) %init(MenuHook, MenuViewController = menuCls);
@@ -296,10 +315,7 @@ static NSURL *gLastPlayedURL = nil; // Moved to top so everyone can see it
 %end
 
 %ctor {
-    // 1. Defaults
     NSUserDefaults *d = [NSUserDefaults standardUserDefaults];
     if (![d objectForKey:kIFBlockAds]) [d setBool:YES forKey:kIFBlockAds];
-
-    // 2. Start Lifecycle Monitor
     %init(AppLifecycle);
 }

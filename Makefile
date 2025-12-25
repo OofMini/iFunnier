@@ -7,11 +7,10 @@ include $(THEOS)/makefiles/common.mk
 TWEAK_NAME = iFunnier
 
 iFunnier_FILES = Logos/iFunnier.x
-# Optimization flags recommended by audit
 iFunnier_CFLAGS = -fobjc-arc -Wno-deprecated-declarations -Os -fvisibility=hidden
 
-# CRITICAL: Expanded Swift Runtime Support
-iFunnier_LDFLAGS = -lswiftCore -lswiftFoundation -lswiftObjectiveC -lswiftCompatibility56
+# FIXED: Removed -lswiftCompatibility56 which caused the build error
+iFunnier_LDFLAGS = -lswiftCore -lswiftFoundation -lswiftObjectiveC
 
 iFunnier_FRAMEWORKS = UIKit Foundation AVFoundation
 

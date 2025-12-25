@@ -8,7 +8,7 @@ include $(THEOS)/makefiles/common.mk
 
 TWEAK_NAME = iFunnier
 
-# OPTIMIZED: Removed IFunnierSettings.x (Merged into iFunnier.x)
+# Only one file now
 iFunnier_FILES = Logos/iFunnier.x
 iFunnier_CFLAGS = -fobjc-arc -Wno-deprecated-declarations
 iFunnier_FRAMEWORKS = UIKit Foundation AVFoundation

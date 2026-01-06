@@ -86,30 +86,28 @@ static NSURL *gLastPlayedURL = nil;
 }
 @end
 
-// ULTRA-AGGRESSIVE AD DETECTOR
+// ULTRA-AGGRESSIVE ITEM DETECTOR
 static BOOL IsAdItem(id item) {
     if (!item) return NO;
-    
-    // 1. Check Class Name
     NSString *cls = NSStringFromClass([item class]);
-    if ([cls containsString:@"Ad"] || [cls containsString:@"Sponsored"] || [cls containsString:@"Native"] || 
-        [cls containsString:@"Campaign"] || [cls containsString:@"Tier"] || [cls containsString:@"Digi"]) return YES;
     
-    // 2. Check "isAd" / "isSponsored" Booleans
+    // 1. Keyword Blocklist (Expanded for Premium Upsells)
+    // "Tier" often refers to the Premium Tiers
+    if ([cls containsString:@"Ad"] || [cls containsString:@"Sponsored"] || [cls containsString:@"Native"] || 
+        [cls containsString:@"Campaign"] || [cls containsString:@"Tier"] || [cls containsString:@"Digi"] ||
+        [cls containsString:@"Upsell"] || [cls containsString:@"Promo"]) return YES;
+    
+    // 2. Boolean Checks
     if ([item respondsToSelector:@selector(isAd)]) { if ([[item performSelector:@selector(isAd)] boolValue]) return YES; }
     if ([item respondsToSelector:@selector(isSponsored)]) { if ([[item performSelector:@selector(isSponsored)] boolValue]) return YES; }
     
-    // 3. Check "type" / "itemType" Strings (Crucial for Placeholders)
+    // 3. Type String Checks
     if ([item respondsToSelector:@selector(type)]) {
         id type = [item performSelector:@selector(type)];
         if ([type isKindOfClass:[NSString class]]) {
-            if ([type isEqualToString:@"ad"] || [type isEqualToString:@"native_ad"] || [type isEqualToString:@"mrec"]) return YES;
-        }
-    }
-    if ([item respondsToSelector:@selector(itemType)]) {
-        id type = [item performSelector:@selector(itemType)];
-        if ([type isKindOfClass:[NSString class]]) {
-            if ([type containsString:@"ad"]) return YES;
+            NSString *t = (NSString *)type;
+            if ([t isEqualToString:@"ad"] || [t isEqualToString:@"native_ad"] || [t isEqualToString:@"mrec"] || 
+                [t isEqualToString:@"upsell"] || [t containsString:@"premium"]) return YES;
         }
     }
     
@@ -230,7 +228,7 @@ static Class FindSwiftClass(NSString *name) {
 }
 %end
 
-// Modern Diffable Data Source Hook (Critical for Swiping Ads)
+// Diffable Data Source (Modern Feed)
 %hook UICollectionViewDiffableDataSource
 - (void)applySnapshot:(id)snapshot animatingDifferences:(BOOL)animated {
     if (![snapshot respondsToSelector:@selector(itemIdentifiers)]) { %orig; return; }
@@ -247,16 +245,16 @@ static Class FindSwiftClass(NSString *name) {
         }
     }
     
-    // If we filtered anything, rebuild the snapshot
     if (foundAd) {
         id newSnap = [[snapshot class] new];
-        // Re-add sections if possible (simplified for stability)
+        // Attempt to copy sections
         if ([snapshot respondsToSelector:@selector(sectionIdentifiers)]) {
             NSArray *sections = [snapshot performSelector:@selector(sectionIdentifiers)];
             if ([newSnap respondsToSelector:@selector(appendSections:)]) {
                 [newSnap performSelector:@selector(appendSections:) withObject:sections];
             }
         }
+        // Append clean items
         if ([newSnap respondsToSelector:@selector(appendItems:)]) {
             [newSnap performSelector:@selector(appendItems:) withObject:cleanItems];
         }
@@ -285,22 +283,39 @@ static Class FindSwiftClass(NSString *name) {
 // 4. LAYOUT LOGIC (Collapsing Placeholders)
 // ==========================================================
 %group LayoutLogic
-// Force height to 0 for any cell that holds an ad item
+
+// Force Size to 0 for Ads/Upsells
 %hook UICollectionView
 - (UICollectionViewLayoutAttributes *)layoutAttributesForItemAtIndexPath:(NSIndexPath *)indexPath {
     UICollectionViewLayoutAttributes *attrs = %orig;
     
-    // Check Data Source
+    // Check Data Source for this index
     id ds = self.dataSource;
-    if (ds && [ds respondsToSelector:@selector(itemAtIndexPath:)]) { // Common method name
+    if (ds && [ds respondsToSelector:@selector(itemAtIndexPath:)]) { 
         id item = [ds performSelector:@selector(itemAtIndexPath:) withObject:indexPath];
         if (IsAdItem(item)) {
             attrs.frame = CGRectZero;
             attrs.size = CGSizeZero;
             attrs.hidden = YES;
+            attrs.alpha = 0;
         }
     }
     return attrs;
+}
+
+// Prevent cell creation for ads
+- (UICollectionViewCell *)cellForItemAtIndexPath:(NSIndexPath *)indexPath {
+    UICollectionViewCell *cell = %orig;
+    
+    // Check reuse identifier for obvious ads
+    if ([cell.reuseIdentifier containsString:@"Ad"] || 
+        [cell.reuseIdentifier containsString:@"Native"] ||
+        [cell.reuseIdentifier containsString:@"Upsell"]) {
+        cell.hidden = YES;
+        cell.alpha = 0;
+    }
+    
+    return cell;
 }
 %end
 %end
@@ -367,10 +382,9 @@ static Class FindSwiftClass(NSString *name) {
 %end
 
 // ==========================================================
-// 7. SYSTEM UI HOOKS (System classes)
+// 7. SYSTEM UI HOOKS
 // ==========================================================
 %group SystemUIHooks
-// Text Replacer
 %hook UILabel
 - (void)setText:(NSString *)text {
     if ([text isEqualToString:@"Get Premium"] || [text isEqualToString:@"Upgrade to Premium"]) { %orig(@"Lifetime Subscription"); return; }
@@ -387,7 +401,6 @@ static Class FindSwiftClass(NSString *name) {
 }
 %end
 
-// Lock Icons - Recursive
 %hook CALayer
 - (void)setContents:(id)contents {
     if ([contents isKindOfClass:[UIImage class]]) {
@@ -398,7 +411,7 @@ static Class FindSwiftClass(NSString *name) {
 }
 %end
 
-// Unlock Context Menus (Save without Watermark)
+// CONTEXT MENU UNLOCKER (Fixes Save Button Lock)
 %hook UIMenu
 + (UIMenu *)menuWithTitle:(NSString *)title image:(UIImage *)image identifier:(NSString *)identifier options:(UIMenuOptions)options children:(NSArray *)children {
     NSMutableArray *unlockedChildren = [NSMutableArray array];
@@ -408,17 +421,15 @@ static Class FindSwiftClass(NSString *name) {
             UIAction *action = (UIAction *)item;
             NSString *actTitle = action.title;
             
-            // Check for Save/Watermark actions
             if ([actTitle containsString:@"Save"] || [actTitle containsString:@"Watermark"]) {
                 UIImage *unlockedImage = action.image;
                 if ([[action.image accessibilityIdentifier] containsString:@"lock"]) { unlockedImage = nil; }
                 
-                // Recreate action without disabled attributes
                 UIAction *newAction = [UIAction actionWithTitle:actTitle 
                                                           image:unlockedImage 
                                                      identifier:action.identifier 
                                                         handler:[action valueForKey:@"handler"]];
-                [newAction setAttributes:0]; // Enable
+                [newAction setAttributes:0]; // Enabled
                 [newAction setState:UIMenuElementStateOff]; 
                 
                 [unlockedChildren addObject:newAction];
@@ -487,7 +498,7 @@ static Class FindSwiftClass(NSString *name) {
 %end
 
 // ==========================================================
-// 9. AD LOGIC
+// 9. AD LOGIC (BOTTOM BANNER KILLER)
 // ==========================================================
 @interface FNFeedNativeAdCell : UICollectionViewCell @end
 %group AdLogic
@@ -502,6 +513,7 @@ static Class FindSwiftClass(NSString *name) {
 %end
 %hook GADBannerView
 - (void)loadRequest:(id)arg1 { }
+- (void)didMoveToWindow { %orig; self.hidden = YES; } // Instant kill
 %end
 %hook GADInterstitialAd
 - (void)presentFromRootViewController:(id)arg1 { }
@@ -623,7 +635,7 @@ static Class FindSwiftClass(NSString *name) {
 %end
 
 // ==========================================================
-// 12. GHOST HOOK (Lazy Loading)
+// 12. GHOST HOOK
 // ==========================================================
 %group GhostLogic
 %hook NSObject
@@ -643,10 +655,9 @@ static Class FindSwiftClass(NSString *name) {
 %ctor {
     gURLLock = [[NSLock alloc] init];
     
-    // 1. Clear Cache
-    [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"premium_status"];
+    NSUserDefaults *d = [NSUserDefaults standardUserDefaults];
+    [d removeObjectForKey:@"premium_status"];
     
-    // 2. Init Core Hooks
     %init(CoreLogic);
     %init(PopupLogic);
     %init(FeatureLogic);
@@ -655,24 +666,20 @@ static Class FindSwiftClass(NSString *name) {
     %init(SystemUIHooks); // Fixes Save Menu Locks
     %init(ShareLogic);
     
-    // 3. Init Ads if enabled
     if (![[NSUserDefaults standardUserDefaults] objectForKey:kIFBlockAds]) 
         [[NSUserDefaults standardUserDefaults] setBool:YES forKey:kIFBlockAds];
         
     if ([[NSUserDefaults standardUserDefaults] boolForKey:kIFBlockAds]) 
         %init(AdLogic);
     
-    // 4. Remote Config (Safe Init)
     Class rc = objc_getClass("FIRRemoteConfig");
     if (rc) %init(RCLogic);
     
-    // 5. Try Static Init for App Classes
     Class menu = FindSwiftClass(@"MenuViewController");
     if (menu) %init(AppUIHooks_Static, MenuViewController = menu);
     
     Class vid = FindSwiftClass(@"VideoSaveEnableServiceImpl");
     if (vid) %init(LegacyHooks_Static, VideoSaveEnableServiceImpl = vid);
     
-    // 6. Enable Ghost Hook for fallbacks
     %init(GhostLogic);
 }

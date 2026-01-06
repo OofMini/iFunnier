@@ -2,7 +2,6 @@
 #import <AVFoundation/AVFoundation.h>
 #import <objc/runtime.h>
 #import <dlfcn.h>
-#import <os/log.h>
 #import <StoreKit/StoreKit.h>
 
 // --- PREFERENCES ---
@@ -15,10 +14,8 @@ static NSLock *gURLLock = nil;
 static NSURL *gLastPlayedURL = nil;
 
 // ==========================================================
-// 1. HELPERS & UI COMPONENTS
+// 1. HELPER CLASSES & FUNCTIONS
 // ==========================================================
-
-// --- Video Downloader ---
 @interface IFDownloadActivity : UIActivity @end
 @implementation IFDownloadActivity
 - (UIActivityType)activityType { return @"com.ifunnier.download"; }
@@ -45,7 +42,6 @@ static NSURL *gLastPlayedURL = nil;
 + (UIActivityCategory)activityCategory { return UIActivityCategoryAction; }
 @end
 
-// --- Settings Menu ---
 @interface iFunnierSettingsViewController : UITableViewController @end
 @implementation iFunnierSettingsViewController
 - (void)viewDidLoad {
@@ -90,7 +86,6 @@ static NSURL *gLastPlayedURL = nil;
 }
 @end
 
-// --- Utils ---
 static BOOL IsAdItem(id item) {
     if (!item) return NO;
     NSString *cls = NSStringFromClass([item class]);
@@ -128,7 +123,7 @@ static Class FindSwiftClass(NSString *name) {
 // ==========================================================
 %group CoreLogic
 
-// 1. Network Interception (REST)
+// Network Interception
 %hook NSURLSession
 - (NSURLSessionDataTask *)dataTaskWithRequest:(NSURLRequest *)request completionHandler:(void (^)(NSData *, NSURLResponse *, NSError *))handler {
     NSString *str = request.URL.absoluteString;
@@ -144,7 +139,7 @@ static Class FindSwiftClass(NSString *name) {
 }
 %end
 
-// 2. JSON/GraphQL Injection
+// JSON Injection
 %hook NSJSONSerialization
 + (id)JSONObjectWithData:(NSData *)data options:(NSJSONReadingOptions)opt error:(NSError **)error {
     id json = %orig;
@@ -161,13 +156,13 @@ static Class FindSwiftClass(NSString *name) {
 }
 %end
 
-// 3. User Model & Bitmasks
+// User Model
 %hook FNUser
 - (BOOL)isPremium { return YES; }
 - (BOOL)isPro { return YES; }
 - (BOOL)hasSubscription { return YES; }
 - (NSString *)subscriptionStatusText { return @"Lifetime Subscription"; }
-- (NSInteger)featureFlags { return 0xFFFFFF; } // All bits set
+- (NSInteger)featureFlags { return 0xFFFFFF; } 
 - (NSInteger)entitlements { return NSIntegerMax; }
 %end
 
@@ -176,7 +171,7 @@ static Class FindSwiftClass(NSString *name) {
 - (NSString *)subscriptionTitle { return @"Lifetime"; }
 %end
 
-// 4. State Restoration (Prevent loading "Free" state)
+// State Restoration
 %hook NSKeyedUnarchiver
 + (id)unarchivedObjectOfClass:(Class)cls fromData:(NSData *)data error:(NSError **)error {
     id obj = %orig;
@@ -189,7 +184,7 @@ static Class FindSwiftClass(NSString *name) {
 %end
 
 // ==========================================================
-// 3. FEED LOGIC (Cleaner & Data Source)
+// 3. FEED LOGIC
 // ==========================================================
 %group FeedLogic
 %hook FeedDataProvider
@@ -229,27 +224,21 @@ static Class FindSwiftClass(NSString *name) {
 %end
 
 // ==========================================================
-// 4. POPUP LOGIC (Coordinators & Timers)
+// 4. POPUP LOGIC
 // ==========================================================
 %group PopupLogic
-// Block Coordinators
 %hook StartupCoordinator
 - (void)start { }
 - (void)showOffer { }
 - (void)presentOffer:(id)offer { }
 %end
-
-// Block Commands
 %hook ShowOfferCommand
 - (BOOL)shouldExecute { return NO; }
 - (void)execute { }
 %end
-
-// Block View Controllers
 %hook OfferViewController
 - (void)viewWillAppear:(BOOL)animated { [self dismissViewControllerAnimated:NO completion:nil]; }
 %end
-
 %hook UIViewController
 - (void)presentViewController:(UIViewController *)vc animated:(BOOL)flag completion:(void (^)(void))completion {
     NSString *name = NSStringFromClass([vc class]);
@@ -260,8 +249,6 @@ static Class FindSwiftClass(NSString *name) {
     %orig;
 }
 %end
-
-// Block Timers
 %hook NSTimer
 + (NSTimer *)scheduledTimerWithTimeInterval:(NSTimeInterval)ti target:(id)target selector:(SEL)selector userInfo:(id)userInfo repeats:(BOOL)repeats {
     if (NSStringFromSelector(selector) && ([NSStringFromSelector(selector) containsString:@"showOffer"])) return nil;
@@ -271,21 +258,19 @@ static Class FindSwiftClass(NSString *name) {
 %end
 
 // ==========================================================
-// 5. FEATURE LOGIC (Experiments & Config)
+// 5. FEATURE LOGIC
 // ==========================================================
 %group FeatureLogic
 %hook ExperimentService
-- (NSInteger)variantForExperiment:(NSInteger)id { return 1; } // Treatment
+- (NSInteger)variantForExperiment:(NSInteger)id { return 1; }
 - (BOOL)isEnabled:(NSInteger)id { return YES; }
 - (BOOL)isInTreatment:(NSInteger)id { return YES; }
 - (NSInteger)experimentBitmask { return NSIntegerMax; }
 %end
-
 %hook ConfigService
 - (id)valueForKey:(NSString *)key { return @YES; }
 - (NSInteger)intValueForKey:(NSString *)key { return 1; }
 %end
-
 %hook FIRRemoteConfig
 - (id)configValueForKey:(NSString *)key {
     if ([key containsString:@"premium"] || [key containsString:@"video"] || [key containsString:@"save"]) return [NSNumber numberWithBool:YES];
@@ -295,10 +280,10 @@ static Class FindSwiftClass(NSString *name) {
 %end
 
 // ==========================================================
-// 6. UI LOGIC (Sidebar, Menu, Locks)
+// 6. SYSTEM UI HOOKS (System classes)
 // ==========================================================
-%group UILogic
-// Sidebar Text Fix
+%group SystemUIHooks
+// Text Replacer
 %hook UILabel
 - (void)setText:(NSString *)text {
     if ([text isEqualToString:@"Get Premium"] || [text isEqualToString:@"Upgrade to Premium"]) { %orig(@"Lifetime Subscription"); return; }
@@ -315,12 +300,7 @@ static Class FindSwiftClass(NSString *name) {
 }
 %end
 
-// Sidebar ViewModel
-%hook SidebarViewModel
-- (NSString *)premiumStatusText { return @"Lifetime Subscription"; }
-%end
-
-// Lock Icons (Core Animation)
+// Lock Icons
 %hook CALayer
 - (void)setContents:(id)contents {
     if ([contents isKindOfClass:[UIImage class]]) {
@@ -330,8 +310,42 @@ static Class FindSwiftClass(NSString *name) {
     %orig;
 }
 %end
+%end
 
-// Menu Button
+// ==========================================================
+// 7. APP UI HOOKS (Static & Dynamic Groups)
+// ==========================================================
+
+// STATIC GROUP (Used in ctor)
+%group AppUIHooks_Static
+%hook SidebarViewModel
+- (NSString *)premiumStatusText { return @"Lifetime Subscription"; }
+%end
+%hook MenuViewController
+- (void)viewDidAppear:(BOOL)animated {
+    %orig;
+    UIViewController *vc = (UIViewController *)self;
+    if (vc.navigationItem.rightBarButtonItem && vc.navigationItem.rightBarButtonItem.tag == 999) return;
+    UIBarButtonItem *btn = [[UIBarButtonItem alloc] initWithImage:[UIImage systemImageNamed:@"gear"] style:UIBarButtonItemStylePlain target:self action:@selector(openSettings)];
+    btn.tag = 999;
+    vc.navigationItem.rightBarButtonItem = btn;
+}
+%new
+- (void)openSettings {
+    iFunnierSettingsViewController *vc = [[iFunnierSettingsViewController alloc] initWithStyle:UITableViewStyleInsetGrouped];
+    UINavigationController *nav = [[UINavigationController alloc] initWithRootViewController:vc];
+    if (UIDevice.currentDevice.userInterfaceIdiom == UIUserInterfaceIdiomPad) nav.modalPresentationStyle = UIModalPresentationFormSheet;
+    else nav.modalPresentationStyle = UIModalPresentationFullScreen;
+    [(UIViewController *)self presentViewController:nav animated:YES completion:nil];
+}
+%end
+%end
+
+// DYNAMIC GROUP (Duplicate logic for Ghost Hook)
+%group AppUIHooks_Dynamic
+%hook SidebarViewModel
+- (NSString *)premiumStatusText { return @"Lifetime Subscription"; }
+%end
 %hook MenuViewController
 - (void)viewDidAppear:(BOOL)animated {
     %orig;
@@ -353,7 +367,7 @@ static Class FindSwiftClass(NSString *name) {
 %end
 
 // ==========================================================
-// 7. AD LOGIC (Blocking)
+// 8. AD LOGIC
 // ==========================================================
 @interface FNFeedNativeAdCell : UICollectionViewCell @end
 %group AdLogic
@@ -378,7 +392,7 @@ static Class FindSwiftClass(NSString *name) {
 %end
 
 // ==========================================================
-// 8. SHARE LOGIC (Watermarks)
+// 9. SHARE LOGIC
 // ==========================================================
 %group ShareLogic
 %hook UIActivityItemProvider
@@ -415,9 +429,46 @@ static Class FindSwiftClass(NSString *name) {
 %end
 
 // ==========================================================
-// 9. LEGACY FALLBACKS
+// 10. LEGACY FALLBACKS (Static & Dynamic Groups)
 // ==========================================================
-%group LegacyLogic
+
+// STATIC
+%group LegacyHooks_Static
+%hook PremiumStatusServiceImpl
+- (BOOL)isActive { return YES; }
+%end
+%hook PremiumFeaturesServiceImpl
+- (BOOL)isEnabled { return YES; }
+- (BOOL)isFeatureAvailable:(NSInteger)f forPlan:(NSInteger)p { return YES; }
+%end
+%hook VideoSaveEnableServiceImpl
+- (BOOL)isEnabled { return YES; }
+- (BOOL)isVideoSaveEnabled { return YES; }
+- (void)setIsVideoSaveEnabled:(BOOL)enabled { %orig(YES); }
+- (BOOL)isWatermarkRemovalEnabled { return YES; }
++ (instancetype)shared {
+    id shared = %orig;
+    if ([shared respondsToSelector:@selector(setIsVideoSaveEnabled:)]) [shared performSelector:@selector(setIsVideoSaveEnabled:) withObject:@YES];
+    return shared;
+}
+%end
+%hook PremiumPurchaseManagerImpl
+- (BOOL)hasActiveSubscription { return YES; }
+- (id)activeSubscription {
+    static id mockSub = nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        Class subClass = FindSwiftClass(@"Subscription");
+        if (subClass) mockSub = [subClass new];
+        else mockSub = [NSObject new];
+    });
+    return mockSub;
+}
+%end
+%end
+
+// DYNAMIC
+%group LegacyHooks_Dynamic
 %hook PremiumStatusServiceImpl
 - (BOOL)isActive { return YES; }
 %end
@@ -452,7 +503,7 @@ static Class FindSwiftClass(NSString *name) {
 %end
 
 // ==========================================================
-// 10. GHOST HOOK (Lazy Loading)
+// 11. GHOST HOOK (Lazy Loading)
 // ==========================================================
 %group GhostLogic
 %hook NSObject
@@ -460,8 +511,8 @@ static Class FindSwiftClass(NSString *name) {
     %orig;
     const char *n = class_getName(self);
     if (!n) return;
-    if (strstr(n, "VideoSaveEnableServiceImpl")) %init(LegacyLogic);
-    if (strstr(n, "MenuViewController")) %init(UILogic);
+    if (strstr(n, "VideoSaveEnableServiceImpl")) %init(LegacyHooks_Dynamic, VideoSaveEnableServiceImpl = self);
+    if (strstr(n, "MenuViewController")) %init(AppUIHooks_Dynamic, MenuViewController = self);
 }
 %end
 %end
@@ -480,9 +531,8 @@ static Class FindSwiftClass(NSString *name) {
     %init(PopupLogic);
     %init(FeatureLogic);
     %init(FeedLogic);
-    %init(UILogic);
+    %init(SystemUIHooks); // System classes (UILabel, etc)
     %init(ShareLogic);
-    %init(LegacyLogic);
     
     // 3. Init Ads if enabled
     if (![[NSUserDefaults standardUserDefaults] objectForKey:kIFBlockAds]) 
@@ -493,8 +543,15 @@ static Class FindSwiftClass(NSString *name) {
     
     // 4. Remote Config
     Class rc = objc_getClass("FIRRemoteConfig");
-    if (rc) %init(FeatureLogic); // Re-init group for RC if found
+    if (rc) %init(FeatureLogic); // Re-apply for RC
     
-    // 5. Enable Ghost Hook for safety
+    // 5. Try Static Init for App Classes
+    Class menu = FindSwiftClass(@"MenuViewController");
+    if (menu) %init(AppUIHooks_Static, MenuViewController = menu);
+    
+    Class vid = FindSwiftClass(@"VideoSaveEnableServiceImpl");
+    if (vid) %init(LegacyHooks_Static, VideoSaveEnableServiceImpl = vid);
+    
+    // 6. Enable Ghost Hook for fallbacks
     %init(GhostLogic);
 }

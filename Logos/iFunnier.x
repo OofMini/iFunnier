@@ -3,26 +3,22 @@
 #import <objc/runtime.h>
 #import <dlfcn.h>
 #import <os/log.h>
+#import <StoreKit/StoreKit.h>
 
 // --- PREFERENCES ---
 #define kIFBlockAds @"kIFBlockAds"
 #define kIFBlockUpsells @"kIFBlockUpsells"
 #define kIFNoWatermark @"kIFNoWatermark"
 
-// --- LOGGING MACROS ---
-#ifdef DEBUG
-#define IFLog(fmt, ...) NSLog(@"[iFunnier] " fmt, ##__VA_ARGS__)
-#else
-#define IFLog(fmt, ...) // Disabled in release
-#endif
-
 // --- THREAD SAFETY ---
 static NSLock *gURLLock = nil;
 static NSURL *gLastPlayedURL = nil;
 
 // ==========================================================
-// 1. HELPER CLASSES
+// 1. HELPERS & UI COMPONENTS
 // ==========================================================
+
+// --- Video Downloader ---
 @interface IFDownloadActivity : UIActivity @end
 @implementation IFDownloadActivity
 - (UIActivityType)activityType { return @"com.ifunnier.download"; }
@@ -34,10 +30,7 @@ static NSURL *gLastPlayedURL = nil;
     NSURL *url = gLastPlayedURL;
     [gURLLock unlock];
 
-    if (!url) {
-        [self activityDidFinish:NO];
-        return;
-    }
+    if (!url) { [self activityDidFinish:NO]; return; }
 
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
         NSData *data = [NSData dataWithContentsOfURL:url];
@@ -46,14 +39,13 @@ static NSURL *gLastPlayedURL = nil;
             [data writeToFile:path atomically:YES];
             UISaveVideoAtPathToSavedPhotosAlbum(path, nil, nil, nil);
         }
-        dispatch_async(dispatch_get_main_queue(), ^{
-            [self activityDidFinish:YES];
-        });
+        dispatch_async(dispatch_get_main_queue(), ^{ [self activityDidFinish:YES]; });
     });
 }
 + (UIActivityCategory)activityCategory { return UIActivityCategoryAction; }
 @end
 
+// --- Settings Menu ---
 @interface iFunnierSettingsViewController : UITableViewController @end
 @implementation iFunnierSettingsViewController
 - (void)viewDidLoad {
@@ -91,28 +83,30 @@ static NSURL *gLastPlayedURL = nil;
     banner.textAlignment = NSTextAlignmentCenter;
     banner.textColor = [UIColor whiteColor];
     banner.alpha = 0;
-    
-    UIWindow *window = self.view.window;
-    [window addSubview:banner];
-    
+    [self.view.window addSubview:banner];
     [UIView animateWithDuration:0.3 animations:^{ banner.alpha = 1; } completion:^(BOOL f){
         [UIView animateWithDuration:0.3 delay:2.0 options:0 animations:^{ banner.alpha = 0; } completion:^(BOOL f){ [banner removeFromSuperview]; }];
     }];
 }
 @end
 
-// ==========================================================
-// 2. OPTIMIZED HELPERS
-// ==========================================================
+// --- Utils ---
+static BOOL IsAdItem(id item) {
+    if (!item) return NO;
+    NSString *cls = NSStringFromClass([item class]);
+    if ([cls containsString:@"Ad"] || [cls containsString:@"Sponsored"] || [cls containsString:@"Native"]) return YES;
+    if ([item respondsToSelector:@selector(isAd)]) { if ([[item performSelector:@selector(isAd)] boolValue]) return YES; }
+    if ([item respondsToSelector:@selector(isSponsored)]) { if ([[item performSelector:@selector(isSponsored)] boolValue]) return YES; }
+    return NO;
+}
+
 static Class FindSwiftClass(NSString *name) {
     static NSMutableDictionary *cache = nil;
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{ cache = [NSMutableDictionary dictionary]; });
-    
     if (cache[name]) return cache[name];
     
     Class cls = objc_getClass([name UTF8String]);
-    
     if (!cls) {
         NSArray *modules = @[@"Premium", @"iFunny", @"iFunnyApp", @"Core", @"libiFunny", @"User"];
         for (NSString *module in modules) {
@@ -121,227 +115,248 @@ static Class FindSwiftClass(NSString *name) {
             if (cls) break;
         }
     }
-    
     if (!cls) {
         NSString *mangled = [NSString stringWithFormat:@"_TtC7Premium%lu%@", (unsigned long)name.length, name];
         cls = objc_getClass([mangled UTF8String]);
     }
-    
     if (cls) cache[name] = cls;
     return cls;
 }
 
 // ==========================================================
-// 3. NETWORK INTERCEPTION
+// 2. CORE LOGIC (Network & User Model)
 // ==========================================================
-%group NetworkHook
+%group CoreLogic
+
+// 1. Network Interception (REST)
 %hook NSURLSession
 - (NSURLSessionDataTask *)dataTaskWithRequest:(NSURLRequest *)request completionHandler:(void (^)(NSData *, NSURLResponse *, NSError *))handler {
     NSString *str = request.URL.absoluteString;
-    
     if ([str containsString:@"premium"] || [str containsString:@"subscription"] || [str containsString:@"billing"]) {
-        IFLog("Intercepted: %@", str);
-        
         NSURLSessionDataTask *dummy = %orig(request, ^(NSData *d, NSURLResponse *r, NSError *e){});
-        
-        NSDictionary *fake = @{
-            @"is_premium": @YES, @"subscription_active": @YES,
-            @"video_save_enabled": @YES, @"no_ads": @YES,
-            @"watermark_removal": @YES
-        };
+        NSDictionary *fake = @{ @"is_premium": @YES, @"subscription_active": @YES, @"video_save_enabled": @YES, @"no_ads": @YES, @"watermark_removal": @YES };
         NSData *data = [NSJSONSerialization dataWithJSONObject:fake options:0 error:nil];
         NSHTTPURLResponse *resp = [[NSHTTPURLResponse alloc] initWithURL:request.URL statusCode:200 HTTPVersion:@"HTTP/1.1" headerFields:nil];
-        
-        if (handler) {
-            dispatch_async(dispatch_get_main_queue(), ^{ handler(data, resp, nil); });
-        }
+        if (handler) dispatch_async(dispatch_get_main_queue(), ^{ handler(data, resp, nil); });
         return dummy;
     }
     return %orig;
 }
 %end
-%end
 
-// ==========================================================
-// 4. MENU HOOKS
-// ==========================================================
-%group MenuHookStatic
-%hook MenuViewController
-- (void)viewDidAppear:(BOOL)animated {
-    %orig;
-    UIViewController *vc = (UIViewController *)self;
-    if (vc.navigationItem.rightBarButtonItem && vc.navigationItem.rightBarButtonItem.tag == 999) return;
-    UIBarButtonItem *btn = [[UIBarButtonItem alloc] initWithImage:[UIImage systemImageNamed:@"gear"] style:UIBarButtonItemStylePlain target:self action:@selector(openSettings)];
-    btn.tag = 999;
-    vc.navigationItem.rightBarButtonItem = btn;
-}
-%new
-- (void)openSettings {
-    iFunnierSettingsViewController *vc = [[iFunnierSettingsViewController alloc] initWithStyle:UITableViewStyleInsetGrouped];
-    UINavigationController *nav = [[UINavigationController alloc] initWithRootViewController:vc];
-    if (UIDevice.currentDevice.userInterfaceIdiom == UIUserInterfaceIdiomPad) {
-        nav.modalPresentationStyle = UIModalPresentationFormSheet;
-    } else {
-        nav.modalPresentationStyle = UIModalPresentationFullScreen;
+// 2. JSON/GraphQL Injection
+%hook NSJSONSerialization
++ (id)JSONObjectWithData:(NSData *)data options:(NSJSONReadingOptions)opt error:(NSError **)error {
+    id json = %orig;
+    if ([json isKindOfClass:[NSDictionary class]]) {
+        NSMutableDictionary *mutable = [json mutableCopy];
+        if (mutable[@"data"] && mutable[@"data"][@"user"]) {
+            NSMutableDictionary *user = [mutable[@"data"][@"user"] mutableCopy];
+            user[@"isPremium"] = @YES;
+            mutable[@"data"] = [@{@"user": user} mutableCopy];
+            return mutable;
+        }
     }
-    [(UIViewController *)self presentViewController:nav animated:YES completion:nil];
+    return json;
 }
-%end
 %end
 
-%group MenuHookDynamic
-%hook MenuViewController
-- (void)viewDidAppear:(BOOL)animated {
-    %orig;
-    UIViewController *vc = (UIViewController *)self;
-    if (vc.navigationItem.rightBarButtonItem && vc.navigationItem.rightBarButtonItem.tag == 999) return;
-    UIBarButtonItem *btn = [[UIBarButtonItem alloc] initWithImage:[UIImage systemImageNamed:@"gear"] style:UIBarButtonItemStylePlain target:self action:@selector(openSettings)];
-    btn.tag = 999;
-    vc.navigationItem.rightBarButtonItem = btn;
-}
-%new
-- (void)openSettings {
-    iFunnierSettingsViewController *vc = [[iFunnierSettingsViewController alloc] initWithStyle:UITableViewStyleInsetGrouped];
-    UINavigationController *nav = [[UINavigationController alloc] initWithRootViewController:vc];
-    if (UIDevice.currentDevice.userInterfaceIdiom == UIUserInterfaceIdiomPad) {
-        nav.modalPresentationStyle = UIModalPresentationFormSheet;
-    } else {
-        nav.modalPresentationStyle = UIModalPresentationFullScreen;
-    }
-    [(UIViewController *)self presentViewController:nav animated:YES completion:nil];
-}
-%end
-%end
-
-// ==========================================================
-// 5. USER & SIDEBAR HOOKS
-// ==========================================================
-%group UserHook
+// 3. User Model & Bitmasks
 %hook FNUser
 - (BOOL)isPremium { return YES; }
 - (BOOL)isPro { return YES; }
 - (BOOL)hasSubscription { return YES; }
 - (NSString *)subscriptionStatusText { return @"Lifetime Subscription"; }
-- (NSString *)premiumStatusTitle { return @"Lifetime Premium"; }
+- (NSInteger)featureFlags { return 0xFFFFFF; } // All bits set
+- (NSInteger)entitlements { return NSIntegerMax; }
 %end
 
 %hook UserProfile
 - (BOOL)isPremium { return YES; }
 - (NSString *)subscriptionTitle { return @"Lifetime"; }
 %end
-%end
 
-// ==========================================================
-// 6. VIDEO SAVER HOOKS
-// ==========================================================
-%group VideoHookStatic
-%hook VideoSaveEnableServiceImpl
-- (BOOL)isEnabled { return YES; }
-- (BOOL)isVideoSaveEnabled { return YES; }
-- (void)setIsVideoSaveEnabled:(BOOL)enabled { %orig(YES); }
-- (BOOL)canSaveVideo { return YES; }
-- (BOOL)shouldShowUpsell { return NO; }
-- (BOOL)isWatermarkRemovalEnabled { return YES; }
-+ (instancetype)shared {
-    id shared = %orig;
-    if ([shared respondsToSelector:@selector(setIsVideoSaveEnabled:)]) {
-        [shared performSelector:@selector(setIsVideoSaveEnabled:) withObject:@YES];
+// 4. State Restoration (Prevent loading "Free" state)
+%hook NSKeyedUnarchiver
++ (id)unarchivedObjectOfClass:(Class)cls fromData:(NSData *)data error:(NSError **)error {
+    id obj = %orig;
+    if ([obj respondsToSelector:@selector(isPremium)]) {
+        @try { [obj setValue:@YES forKey:@"isPremium"]; } @catch(NSException *e) {}
     }
-    return shared;
+    return obj;
 }
 %end
 %end
 
-%group VideoHookDynamic
-%hook VideoSaveEnableServiceImpl
-- (BOOL)isEnabled { return YES; }
-- (BOOL)isVideoSaveEnabled { return YES; }
-- (void)setIsVideoSaveEnabled:(BOOL)enabled { %orig(YES); }
-- (BOOL)canSaveVideo { return YES; }
-- (BOOL)shouldShowUpsell { return NO; }
-- (BOOL)isWatermarkRemovalEnabled { return YES; }
-+ (instancetype)shared {
-    id shared = %orig;
-    if ([shared respondsToSelector:@selector(setIsVideoSaveEnabled:)]) {
-        [shared performSelector:@selector(setIsVideoSaveEnabled:) withObject:@YES];
+// ==========================================================
+// 3. FEED LOGIC (Cleaner & Data Source)
+// ==========================================================
+%group FeedLogic
+%hook FeedDataProvider
+- (NSArray *)items {
+    NSArray *orig = %orig;
+    NSMutableArray *clean = [NSMutableArray array];
+    for (id item in orig) { if (!IsAdItem(item)) [clean addObject:item]; }
+    return clean;
+}
+- (void)setItems:(NSArray *)items {
+    NSMutableArray *clean = [NSMutableArray array];
+    for (id item in items) { if (!IsAdItem(item)) [clean addObject:item]; }
+    %orig(clean);
+}
+- (void)loadNextPageWithCompletion:(void (^)(NSArray *, BOOL))completion {
+    void (^wrapped)(NSArray *, BOOL) = ^(NSArray *items, BOOL hasMore) {
+        NSMutableArray *cleaned = [NSMutableArray array];
+        for (id item in items) { if (!IsAdItem(item)) [cleaned addObject:item]; }
+        completion(cleaned, hasMore);
+    };
+    %orig(wrapped);
+}
+%end
+
+%hook FeedRepository
+- (void)fetchItemsWithCompletion:(void (^)(NSArray *, NSError *))completion {
+    void (^wrapped)(NSArray *, NSError *) = ^(NSArray *items, NSError *error) {
+        if (items) {
+            NSMutableArray *clean = [NSMutableArray array];
+            for (id item in items) { if (!IsAdItem(item)) [clean addObject:item]; }
+            completion(clean, error);
+        } else { completion(items, error); }
+    };
+    %orig(wrapped);
+}
+%end
+%end
+
+// ==========================================================
+// 4. POPUP LOGIC (Coordinators & Timers)
+// ==========================================================
+%group PopupLogic
+// Block Coordinators
+%hook StartupCoordinator
+- (void)start { }
+- (void)showOffer { }
+- (void)presentOffer:(id)offer { }
+%end
+
+// Block Commands
+%hook ShowOfferCommand
+- (BOOL)shouldExecute { return NO; }
+- (void)execute { }
+%end
+
+// Block View Controllers
+%hook OfferViewController
+- (void)viewWillAppear:(BOOL)animated { [self dismissViewControllerAnimated:NO completion:nil]; }
+%end
+
+%hook UIViewController
+- (void)presentViewController:(UIViewController *)vc animated:(BOOL)flag completion:(void (^)(void))completion {
+    NSString *name = NSStringFromClass([vc class]);
+    if ([name containsString:@"Offer"] || [name containsString:@"Premium"] || [name containsString:@"Upsell"]) {
+        if (completion) completion();
+        return;
     }
-    return shared;
+    %orig;
+}
+%end
+
+// Block Timers
+%hook NSTimer
++ (NSTimer *)scheduledTimerWithTimeInterval:(NSTimeInterval)ti target:(id)target selector:(SEL)selector userInfo:(id)userInfo repeats:(BOOL)repeats {
+    if (NSStringFromSelector(selector) && ([NSStringFromSelector(selector) containsString:@"showOffer"])) return nil;
+    return %orig;
 }
 %end
 %end
 
 // ==========================================================
-// 7. POPUP & AD KILLERS
+// 5. FEATURE LOGIC (Experiments & Config)
 // ==========================================================
-%group PopupKiller_Message
-%hook InAppMessageService
-- (BOOL)shouldShowMessage:(id)arg1 { return NO; }
-%end
-%end
-
-%group PopupKiller_Overlay
-%hook OverlayManager
-- (void)showOverlay:(id)arg1 { }
-%end
+%group FeatureLogic
+%hook ExperimentService
+- (NSInteger)variantForExperiment:(NSInteger)id { return 1; } // Treatment
+- (BOOL)isEnabled:(NSInteger)id { return YES; }
+- (BOOL)isInTreatment:(NSInteger)id { return YES; }
+- (NSInteger)experimentBitmask { return NSIntegerMax; }
 %end
 
-%group PopupKiller_Offer
-%hook LimitedTimeOfferServiceImpl
-- (BOOL)shouldShowOffer { return NO; }
-- (BOOL)isEnabled { return NO; }
-%end
+%hook ConfigService
+- (id)valueForKey:(NSString *)key { return @YES; }
+- (NSInteger)intValueForKey:(NSString *)key { return 1; }
 %end
 
-// ==========================================================
-// 8. OTHER SERVICE HOOKS
-// ==========================================================
-%group StatusHook
-%hook PremiumStatusServiceImpl
-- (BOOL)isActive { return YES; }
-%end
-%end
-
-%group FeaturesHook
-%hook PremiumFeaturesServiceImpl
-- (BOOL)isEnabled { return YES; }
-- (BOOL)isFeatureAvailable:(NSInteger)f forPlan:(NSInteger)p { return YES; }
-- (BOOL)isFeatureAvailableForAnyPlan:(NSInteger)f { return YES; }
-- (BOOL)isFeatureEnabled:(NSInteger)f { return YES; }
-%end
-%end
-
-%group PurchaseHook
-%hook PremiumPurchaseManagerImpl
-- (BOOL)hasActiveSubscription { return YES; }
-- (BOOL)isSubscriptionActive { return YES; }
-- (id)activeSubscription {
-    static id mockSub = nil;
-    static dispatch_once_t onceToken;
-    dispatch_once(&onceToken, ^{
-        Class subClass = FindSwiftClass(@"Subscription");
-        if (subClass) mockSub = [subClass new];
-        else mockSub = [NSObject new];
-    });
-    return mockSub;
+%hook FIRRemoteConfig
+- (id)configValueForKey:(NSString *)key {
+    if ([key containsString:@"premium"] || [key containsString:@"video"] || [key containsString:@"save"]) return [NSNumber numberWithBool:YES];
+    return %orig;
 }
 %end
 %end
 
-%group IconsHook
-%hook PremiumAppIconsServiceImpl
-- (BOOL)canChangeAppIcon { return YES; }
-- (BOOL)isAppIconChangeEnabled { return YES; }
+// ==========================================================
+// 6. UI LOGIC (Sidebar, Menu, Locks)
+// ==========================================================
+%group UILogic
+// Sidebar Text Fix
+%hook UILabel
+- (void)setText:(NSString *)text {
+    if ([text isEqualToString:@"Get Premium"] || [text isEqualToString:@"Upgrade to Premium"]) { %orig(@"Lifetime Subscription"); return; }
+    %orig;
+}
+- (void)setAttributedText:(NSAttributedString *)text {
+    if ([text.string containsString:@"Get Premium"]) {
+        NSDictionary *attrs = [text attributesAtIndex:0 effectiveRange:nil];
+        NSAttributedString *newText = [[NSAttributedString alloc] initWithString:@"Lifetime Subscription" attributes:attrs];
+        %orig(newText);
+        return;
+    }
+    %orig;
+}
+%end
+
+// Sidebar ViewModel
+%hook SidebarViewModel
+- (NSString *)premiumStatusText { return @"Lifetime Subscription"; }
+%end
+
+// Lock Icons (Core Animation)
+%hook CALayer
+- (void)setContents:(id)contents {
+    if ([contents isKindOfClass:[UIImage class]]) {
+        UIImage *img = (UIImage *)contents;
+        if ([[img accessibilityIdentifier] containsString:@"lock"]) return;
+    }
+    %orig;
+}
+%end
+
+// Menu Button
+%hook MenuViewController
+- (void)viewDidAppear:(BOOL)animated {
+    %orig;
+    UIViewController *vc = (UIViewController *)self;
+    if (vc.navigationItem.rightBarButtonItem && vc.navigationItem.rightBarButtonItem.tag == 999) return;
+    UIBarButtonItem *btn = [[UIBarButtonItem alloc] initWithImage:[UIImage systemImageNamed:@"gear"] style:UIBarButtonItemStylePlain target:self action:@selector(openSettings)];
+    btn.tag = 999;
+    vc.navigationItem.rightBarButtonItem = btn;
+}
+%new
+- (void)openSettings {
+    iFunnierSettingsViewController *vc = [[iFunnierSettingsViewController alloc] initWithStyle:UITableViewStyleInsetGrouped];
+    UINavigationController *nav = [[UINavigationController alloc] initWithRootViewController:vc];
+    if (UIDevice.currentDevice.userInterfaceIdiom == UIUserInterfaceIdiomPad) nav.modalPresentationStyle = UIModalPresentationFormSheet;
+    else nav.modalPresentationStyle = UIModalPresentationFullScreen;
+    [(UIViewController *)self presentViewController:nav animated:YES completion:nil];
+}
 %end
 %end
 
 // ==========================================================
-// 9. AD BLOCKER (FIXED)
+// 7. AD LOGIC (Blocking)
 // ==========================================================
-// Define the class interface so 'hidden' and 'alpha' work
-@interface FNFeedNativeAdCell : UICollectionViewCell
-@end
-
-%group AdBlocker
+@interface FNFeedNativeAdCell : UICollectionViewCell @end
+%group AdLogic
 %hook ALAdService
 - (void)loadNextAd:(id)a andNotify:(id)b { }
 %end
@@ -357,80 +372,22 @@ static Class FindSwiftClass(NSString *name) {
 %hook GADInterstitialAd
 - (void)presentFromRootViewController:(id)arg1 { }
 %end
-%hook ISNativeAd
-- (void)loadAd { }
-%end
-%hook PAGBannerAd
-- (void)loadAd:(id)a { }
-%end
-%hook PAGNativeAd
-- (void)loadAd:(id)a { }
-%end
-// FIXED: Compiler now knows FNFeedNativeAdCell is a view
 %hook FNFeedNativeAdCell
-- (void)layoutSubviews {
-    self.hidden = YES; 
-    self.alpha = 0;
-}
+- (void)layoutSubviews { self.hidden = YES; self.alpha = 0; }
 %end
 %end
 
 // ==========================================================
-// 10. TARGETED UI HOOKS
+// 8. SHARE LOGIC (Watermarks)
 // ==========================================================
-%group UIHacks
-%hook UIButton
-- (void)layoutSubviews {
-    %orig;
-    if (!self.superview) return;
-    
-    // Unhide Save/Share buttons
-    if ([self.accessibilityIdentifier containsString:@"save"] || [self.accessibilityIdentifier containsString:@"share"]) {
-        self.enabled = YES;
-        self.userInteractionEnabled = YES;
-        self.alpha = 1.0;
-        
-        // Aggressive Lock Removal
-        for (UIView *subview in self.subviews) {
-            // Check Accessibility ID
-            if ([[subview accessibilityIdentifier] containsString:@"lock"]) {
-                subview.hidden = YES;
-            }
-            // Check Image Name
-            if ([subview isKindOfClass:[UIImageView class]]) {
-                UIImageView *img = (UIImageView *)subview;
-                if ([[img.image accessibilityIdentifier] containsString:@"lock"]) {
-                    img.hidden = YES;
-                }
-            }
-        }
-    }
+%group ShareLogic
+%hook UIActivityItemProvider
+- (id)activityViewController:(UIActivityViewController *)ac itemForActivityType:(UIActivityType)type {
+    id item = %orig;
+    if (!item && [type containsString:@"save"]) return gLastPlayedURL ?: @"";
+    return item;
 }
 %end
-%end
-
-// ==========================================================
-// 11. JAILBREAK BYPASS
-// ==========================================================
-%group JBDectionBypass
-%hook NSFileManager
-- (BOOL)fileExistsAtPath:(NSString *)path {
-    if ([path containsString:@"cydia"] || [path containsString:@"substrate"] || [path containsString:@"/bin/bash"]) return NO;
-    return %orig;
-}
-%end
-%hook UIApplication
-- (BOOL)canOpenURL:(NSURL *)url {
-    if ([url.scheme isEqualToString:@"cydia"] || [url.scheme isEqualToString:@"sileo"]) return NO;
-    return %orig;
-}
-%end
-%end
-
-// ==========================================================
-// 12. SHARE SHEET
-// ==========================================================
-%group BackupVideo
 %hook AVPlayer
 - (void)replaceCurrentItemWithPlayerItem:(id)item {
     %orig;
@@ -445,14 +402,11 @@ static Class FindSwiftClass(NSString *name) {
     }
 }
 %end
-
 %hook UIActivityViewController
 - (instancetype)initWithActivityItems:(NSArray *)items applicationActivities:(NSArray *)activities {
     NSMutableArray *filtered = [NSMutableArray array];
     for (UIActivity *activity in activities) {
-        if (![activity.activityTitle containsString:@"Premium"]) {
-            [filtered addObject:activity];
-        }
+        if (![activity.activityTitle containsString:@"Premium"]) [filtered addObject:activity];
     }
     [filtered addObject:[[IFDownloadActivity alloc] init]];
     return %orig(items, filtered);
@@ -461,97 +415,86 @@ static Class FindSwiftClass(NSString *name) {
 %end
 
 // ==========================================================
-// 13. REMOTE CONFIG HOOK (The Missing Piece)
+// 9. LEGACY FALLBACKS
 // ==========================================================
-%group RemoteConfigHook
-%hook FIRRemoteConfig
-- (id)configValueForKey:(NSString *)key {
-    if ([key containsString:@"premium"] || [key containsString:@"video"] || [key containsString:@"save"]) {
-        return [NSNumber numberWithBool:YES];
-    }
-    return %orig;
+%group LegacyLogic
+%hook PremiumStatusServiceImpl
+- (BOOL)isActive { return YES; }
+%end
+%hook PremiumFeaturesServiceImpl
+- (BOOL)isEnabled { return YES; }
+- (BOOL)isFeatureAvailable:(NSInteger)f forPlan:(NSInteger)p { return YES; }
+%end
+%hook VideoSaveEnableServiceImpl
+- (BOOL)isEnabled { return YES; }
+- (BOOL)isVideoSaveEnabled { return YES; }
+- (void)setIsVideoSaveEnabled:(BOOL)enabled { %orig(YES); }
+- (BOOL)isWatermarkRemovalEnabled { return YES; }
++ (instancetype)shared {
+    id shared = %orig;
+    if ([shared respondsToSelector:@selector(setIsVideoSaveEnabled:)]) [shared performSelector:@selector(setIsVideoSaveEnabled:) withObject:@YES];
+    return shared;
+}
+%end
+%hook PremiumPurchaseManagerImpl
+- (BOOL)hasActiveSubscription { return YES; }
+- (id)activeSubscription {
+    static id mockSub = nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        Class subClass = FindSwiftClass(@"Subscription");
+        if (subClass) mockSub = [subClass new];
+        else mockSub = [NSObject new];
+    });
+    return mockSub;
 }
 %end
 %end
 
 // ==========================================================
-// 14. GHOST HOOK
+// 10. GHOST HOOK (Lazy Loading)
 // ==========================================================
-%group GhostClassHook
+%group GhostLogic
 %hook NSObject
 + (void)initialize {
     %orig;
-    const char *cName = class_getName(self);
-    if (!cName || cName[0] != '_' || !strstr(cName, "Premium")) return;
-    
-    if (strstr(cName, "VideoSaveEnableServiceImpl")) {
-        IFLog("Ghost Caught: %s", cName);
-        %init(VideoHookDynamic, VideoSaveEnableServiceImpl = self);
-    }
-    if (strstr(cName, "MenuViewController")) {
-        %init(MenuHookDynamic, MenuViewController = self);
-    }
+    const char *n = class_getName(self);
+    if (!n) return;
+    if (strstr(n, "VideoSaveEnableServiceImpl")) %init(LegacyLogic);
+    if (strstr(n, "MenuViewController")) %init(UILogic);
 }
 %end
 %end
 
+// ==========================================================
+// INITIALIZATION
+// ==========================================================
 %ctor {
     gURLLock = [[NSLock alloc] init];
     
-    NSUserDefaults *d = [NSUserDefaults standardUserDefaults];
-    [d removeObjectForKey:@"premium_status"];
+    // 1. Clear Cache
+    [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"premium_status"];
     
-    if (![d objectForKey:kIFBlockAds]) [d setBool:YES forKey:kIFBlockAds];
+    // 2. Init Core Hooks
+    %init(CoreLogic);
+    %init(PopupLogic);
+    %init(FeatureLogic);
+    %init(FeedLogic);
+    %init(UILogic);
+    %init(ShareLogic);
+    %init(LegacyLogic);
     
-    %init(BackupVideo);
-    %init(NetworkHook);
-    %init(JBDectionBypass);
-    %init(UIHacks);
+    // 3. Init Ads if enabled
+    if (![[NSUserDefaults standardUserDefaults] objectForKey:kIFBlockAds]) 
+        [[NSUserDefaults standardUserDefaults] setBool:YES forKey:kIFBlockAds];
+        
+    if ([[NSUserDefaults standardUserDefaults] boolForKey:kIFBlockAds]) 
+        %init(AdLogic);
     
-    if ([d boolForKey:kIFBlockAds]) %init(AdBlocker);
-
-    // Initialization Logic
-    
-    Class c;
-    
-    c = FindSwiftClass(@"PremiumStatusServiceImpl");
-    if (c) %init(StatusHook, PremiumStatusServiceImpl = c);
-    
-    c = FindSwiftClass(@"PremiumFeaturesServiceImpl");
-    if (c) %init(FeaturesHook, PremiumFeaturesServiceImpl = c);
-    
-    // Video Saver
-    c = FindSwiftClass(@"VideoSaveEnableServiceImpl");
-    if (c) %init(VideoHookStatic, VideoSaveEnableServiceImpl = c);
-    
-    // Popups (Split Groups)
-    c = FindSwiftClass(@"LimitedTimeOfferServiceImpl");
-    if (c) %init(PopupKiller_Offer, LimitedTimeOfferServiceImpl = c);
-    
-    Class msgSvc = objc_getClass("InAppMessageService"); 
-    if (msgSvc) %init(PopupKiller_Message, InAppMessageService = msgSvc);
-    
-    Class overlay = objc_getClass("OverlayManager");
-    if (overlay) %init(PopupKiller_Overlay, OverlayManager = overlay);
-    
-    c = FindSwiftClass(@"PremiumPurchaseManagerImpl");
-    if (c) %init(PurchaseHook, PremiumPurchaseManagerImpl = c);
-    
-    c = FindSwiftClass(@"PremiumAppIconsServiceImpl");
-    if (c) %init(IconsHook, PremiumAppIconsServiceImpl = c);
-    
-    // User / Sidebar
-    Class userCls = FindSwiftClass(@"FNUser");
-    if (userCls) %init(UserHook, FNUser = userCls);
-    
-    // Menu
-    c = FindSwiftClass(@"MenuViewController");
-    if (!c) c = objc_getClass("MenuViewController");
-    if (c) %init(MenuHookStatic, MenuViewController = c);
-    
-    // Remote Config
+    // 4. Remote Config
     Class rc = objc_getClass("FIRRemoteConfig");
-    if (rc) %init(RemoteConfigHook, FIRRemoteConfig = rc);
+    if (rc) %init(FeatureLogic); // Re-init group for RC if found
     
-    %init(GhostClassHook);
+    // 5. Enable Ghost Hook for safety
+    %init(GhostLogic);
 }

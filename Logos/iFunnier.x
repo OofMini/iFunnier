@@ -86,12 +86,33 @@ static NSURL *gLastPlayedURL = nil;
 }
 @end
 
+// ULTRA-AGGRESSIVE AD DETECTOR
 static BOOL IsAdItem(id item) {
     if (!item) return NO;
+    
+    // 1. Check Class Name
     NSString *cls = NSStringFromClass([item class]);
-    if ([cls containsString:@"Ad"] || [cls containsString:@"Sponsored"] || [cls containsString:@"Native"]) return YES;
+    if ([cls containsString:@"Ad"] || [cls containsString:@"Sponsored"] || [cls containsString:@"Native"] || 
+        [cls containsString:@"Campaign"] || [cls containsString:@"Tier"] || [cls containsString:@"Digi"]) return YES;
+    
+    // 2. Check "isAd" / "isSponsored" Booleans
     if ([item respondsToSelector:@selector(isAd)]) { if ([[item performSelector:@selector(isAd)] boolValue]) return YES; }
     if ([item respondsToSelector:@selector(isSponsored)]) { if ([[item performSelector:@selector(isSponsored)] boolValue]) return YES; }
+    
+    // 3. Check "type" / "itemType" Strings (Crucial for Placeholders)
+    if ([item respondsToSelector:@selector(type)]) {
+        id type = [item performSelector:@selector(type)];
+        if ([type isKindOfClass:[NSString class]]) {
+            if ([type isEqualToString:@"ad"] || [type isEqualToString:@"native_ad"] || [type isEqualToString:@"mrec"]) return YES;
+        }
+    }
+    if ([item respondsToSelector:@selector(itemType)]) {
+        id type = [item performSelector:@selector(itemType)];
+        if ([type isKindOfClass:[NSString class]]) {
+            if ([type containsString:@"ad"]) return YES;
+        }
+    }
+    
     return NO;
 }
 
@@ -184,7 +205,7 @@ static Class FindSwiftClass(NSString *name) {
 %end
 
 // ==========================================================
-// 3. FEED LOGIC
+// 3. FEED LOGIC (Data Source Filtering)
 // ==========================================================
 %group FeedLogic
 %hook FeedDataProvider
@@ -209,6 +230,43 @@ static Class FindSwiftClass(NSString *name) {
 }
 %end
 
+// Modern Diffable Data Source Hook (Critical for Swiping Ads)
+%hook UICollectionViewDiffableDataSource
+- (void)applySnapshot:(id)snapshot animatingDifferences:(BOOL)animated {
+    if (![snapshot respondsToSelector:@selector(itemIdentifiers)]) { %orig; return; }
+    
+    NSArray *items = [snapshot performSelector:@selector(itemIdentifiers)];
+    NSMutableArray *cleanItems = [NSMutableArray array];
+    BOOL foundAd = NO;
+    
+    for (id item in items) {
+        if (!IsAdItem(item)) {
+            [cleanItems addObject:item];
+        } else {
+            foundAd = YES;
+        }
+    }
+    
+    // If we filtered anything, rebuild the snapshot
+    if (foundAd) {
+        id newSnap = [[snapshot class] new];
+        // Re-add sections if possible (simplified for stability)
+        if ([snapshot respondsToSelector:@selector(sectionIdentifiers)]) {
+            NSArray *sections = [snapshot performSelector:@selector(sectionIdentifiers)];
+            if ([newSnap respondsToSelector:@selector(appendSections:)]) {
+                [newSnap performSelector:@selector(appendSections:) withObject:sections];
+            }
+        }
+        if ([newSnap respondsToSelector:@selector(appendItems:)]) {
+            [newSnap performSelector:@selector(appendItems:) withObject:cleanItems];
+        }
+        %orig(newSnap, animated);
+    } else {
+        %orig;
+    }
+}
+%end
+
 %hook FeedRepository
 - (void)fetchItemsWithCompletion:(void (^)(NSArray *, NSError *))completion {
     void (^wrapped)(NSArray *, NSError *) = ^(NSArray *items, NSError *error) {
@@ -224,12 +282,33 @@ static Class FindSwiftClass(NSString *name) {
 %end
 
 // ==========================================================
-// 4. POPUP LOGIC
+// 4. LAYOUT LOGIC (Collapsing Placeholders)
 // ==========================================================
+%group LayoutLogic
+// Force height to 0 for any cell that holds an ad item
+%hook UICollectionView
+- (UICollectionViewLayoutAttributes *)layoutAttributesForItemAtIndexPath:(NSIndexPath *)indexPath {
+    UICollectionViewLayoutAttributes *attrs = %orig;
+    
+    // Check Data Source
+    id ds = self.dataSource;
+    if (ds && [ds respondsToSelector:@selector(itemAtIndexPath:)]) { // Common method name
+        id item = [ds performSelector:@selector(itemAtIndexPath:) withObject:indexPath];
+        if (IsAdItem(item)) {
+            attrs.frame = CGRectZero;
+            attrs.size = CGSizeZero;
+            attrs.hidden = YES;
+        }
+    }
+    return attrs;
+}
+%end
+%end
 
-// FIX: Explicitly define the interface so compiler knows 'self' is a UIViewController
-@interface OfferViewController : UIViewController
-@end
+// ==========================================================
+// 5. POPUP LOGIC
+// ==========================================================
+@interface OfferViewController : UIViewController @end
 
 %group PopupLogic
 %hook StartupCoordinator
@@ -263,7 +342,7 @@ static Class FindSwiftClass(NSString *name) {
 %end
 
 // ==========================================================
-// 5. FEATURE LOGIC
+// 6. FEATURE LOGIC
 // ==========================================================
 %group FeatureLogic
 %hook ExperimentService
@@ -278,7 +357,6 @@ static Class FindSwiftClass(NSString *name) {
 %end
 %end
 
-// FIX: Split RemoteConfig into its own group to prevent re-initialization errors
 %group RCLogic
 %hook FIRRemoteConfig
 - (id)configValueForKey:(NSString *)key {
@@ -289,7 +367,7 @@ static Class FindSwiftClass(NSString *name) {
 %end
 
 // ==========================================================
-// 6. SYSTEM UI HOOKS (System classes)
+// 7. SYSTEM UI HOOKS (System classes)
 // ==========================================================
 %group SystemUIHooks
 // Text Replacer
@@ -309,7 +387,7 @@ static Class FindSwiftClass(NSString *name) {
 }
 %end
 
-// Lock Icons
+// Lock Icons - Recursive
 %hook CALayer
 - (void)setContents:(id)contents {
     if ([contents isKindOfClass:[UIImage class]]) {
@@ -319,13 +397,46 @@ static Class FindSwiftClass(NSString *name) {
     %orig;
 }
 %end
+
+// Unlock Context Menus (Save without Watermark)
+%hook UIMenu
++ (UIMenu *)menuWithTitle:(NSString *)title image:(UIImage *)image identifier:(NSString *)identifier options:(UIMenuOptions)options children:(NSArray *)children {
+    NSMutableArray *unlockedChildren = [NSMutableArray array];
+    
+    for (id item in children) {
+        if ([item isKindOfClass:[UIAction class]]) {
+            UIAction *action = (UIAction *)item;
+            NSString *actTitle = action.title;
+            
+            // Check for Save/Watermark actions
+            if ([actTitle containsString:@"Save"] || [actTitle containsString:@"Watermark"]) {
+                UIImage *unlockedImage = action.image;
+                if ([[action.image accessibilityIdentifier] containsString:@"lock"]) { unlockedImage = nil; }
+                
+                // Recreate action without disabled attributes
+                UIAction *newAction = [UIAction actionWithTitle:actTitle 
+                                                          image:unlockedImage 
+                                                     identifier:action.identifier 
+                                                        handler:[action valueForKey:@"handler"]];
+                [newAction setAttributes:0]; // Enable
+                [newAction setState:UIMenuElementStateOff]; 
+                
+                [unlockedChildren addObject:newAction];
+                continue;
+            }
+        }
+        [unlockedChildren addObject:item];
+    }
+    return %orig(title, image, identifier, options, unlockedChildren);
+}
+%end
 %end
 
 // ==========================================================
-// 7. APP UI HOOKS (Static & Dynamic Groups)
+// 8. APP UI HOOKS
 // ==========================================================
 
-// STATIC GROUP (Used in ctor)
+// STATIC GROUP
 %group AppUIHooks_Static
 %hook SidebarViewModel
 - (NSString *)premiumStatusText { return @"Lifetime Subscription"; }
@@ -350,7 +461,7 @@ static Class FindSwiftClass(NSString *name) {
 %end
 %end
 
-// DYNAMIC GROUP (Duplicate logic for Ghost Hook)
+// DYNAMIC GROUP
 %group AppUIHooks_Dynamic
 %hook SidebarViewModel
 - (NSString *)premiumStatusText { return @"Lifetime Subscription"; }
@@ -376,7 +487,7 @@ static Class FindSwiftClass(NSString *name) {
 %end
 
 // ==========================================================
-// 8. AD LOGIC
+// 9. AD LOGIC
 // ==========================================================
 @interface FNFeedNativeAdCell : UICollectionViewCell @end
 %group AdLogic
@@ -401,7 +512,7 @@ static Class FindSwiftClass(NSString *name) {
 %end
 
 // ==========================================================
-// 9. SHARE LOGIC
+// 10. SHARE LOGIC
 // ==========================================================
 %group ShareLogic
 %hook UIActivityItemProvider
@@ -438,7 +549,7 @@ static Class FindSwiftClass(NSString *name) {
 %end
 
 // ==========================================================
-// 10. LEGACY FALLBACKS (Static & Dynamic Groups)
+// 11. LEGACY FALLBACKS
 // ==========================================================
 
 // STATIC
@@ -512,7 +623,7 @@ static Class FindSwiftClass(NSString *name) {
 %end
 
 // ==========================================================
-// 11. GHOST HOOK (Lazy Loading)
+// 12. GHOST HOOK (Lazy Loading)
 // ==========================================================
 %group GhostLogic
 %hook NSObject
@@ -540,7 +651,8 @@ static Class FindSwiftClass(NSString *name) {
     %init(PopupLogic);
     %init(FeatureLogic);
     %init(FeedLogic);
-    %init(SystemUIHooks); // System classes (UILabel, etc)
+    %init(LayoutLogic); // Collapses placeholders
+    %init(SystemUIHooks); // Fixes Save Menu Locks
     %init(ShareLogic);
     
     // 3. Init Ads if enabled

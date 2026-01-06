@@ -1,0 +1,72 @@
+name: Build .dylib Only
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build Dylib
+    runs-on: macos-latest
+    permissions:
+      contents: write
+
+    env:
+      THEOS: ${{ github.workspace }}/theos
+
+    steps:
+      - name: Checkout Repo
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Dependencies
+        run: brew install make ldid dpkg
+
+      - name: Setup Theos
+        uses: actions/checkout@v4
+        with:
+          repository: theos/theos
+          path: theos
+          submodules: recursive
+          ref: master
+
+      - name: Setup iOS SDK
+        run: |
+          git clone --quiet -n --depth=1 --filter=tree:0 https://github.com/theos/sdks/
+          cd sdks
+          git sparse-checkout set --no-cone iPhoneOS16.5.sdk
+          git checkout
+          mkdir -p $THEOS/sdks
+          mv *.sdk $THEOS/sdks/
+
+      - name: Build Dylib
+        run: |
+          # just 'make' compiles the dylib without creating the deb package
+          make DEBUG=0 FINALPACKAGE=1
+          
+          mkdir -p ${{ github.workspace }}/build_output
+          
+          # Theos places the final universal dylib in .theos/obj/
+          # We copy it to our output directory
+          if [ -f ".theos/obj/iFunnier.dylib" ]; then
+            cp .theos/obj/iFunnier.dylib ${{ github.workspace }}/build_output/iFunnier.dylib
+          else
+            echo "::error::Build failed! Dylib not found at .theos/obj/iFunnier.dylib"
+            # Try to find it just in case
+            find . -name "*.dylib"
+            exit 1
+          fi
+
+      - name: Create Draft Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: dylib-v${{ github.run_number }}
+          name: iFunnier .dylib (Build ${{ github.run_number }})
+          files: ${{ github.workspace }}/build_output/iFunnier.dylib
+          draft: true
+          body: |
+            ### iFunnier Dylib Build
+            - **Build Number**: ${{ github.run_number }}
+            - **Type**: Raw .dylib binary
+            - **Usage**: For manual injection or tools requiring dylibs.
+            - **Status**: Draft Release

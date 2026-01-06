@@ -541,17 +541,13 @@ static Class FindSwiftClass(NSString *name) {
     if ([[NSUserDefaults standardUserDefaults] boolForKey:kIFBlockAds]) 
         %init(AdLogic);
     
-    // 4. Remote Config
-    Class rc = objc_getClass("FIRRemoteConfig");
-    if (rc) %init(FeatureLogic); // Re-apply for RC
-    
-    // 5. Try Static Init for App Classes
+    // 4. Try Static Init for App Classes
     Class menu = FindSwiftClass(@"MenuViewController");
     if (menu) %init(AppUIHooks_Static, MenuViewController = menu);
     
     Class vid = FindSwiftClass(@"VideoSaveEnableServiceImpl");
     if (vid) %init(LegacyHooks_Static, VideoSaveEnableServiceImpl = vid);
     
-    // 6. Enable Ghost Hook for fallbacks
+    // 5. Enable Ghost Hook for fallbacks
     %init(GhostLogic);
 }

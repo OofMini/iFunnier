@@ -6,12 +6,14 @@ include $(THEOS)/makefiles/common.mk
 
 TWEAK_NAME = iFunnier
 
+# OPTIMIZED: Settings merged into main file
 iFunnier_FILES = Logos/iFunnier.x
 iFunnier_CFLAGS = -fobjc-arc -Wno-deprecated-declarations -Os -fvisibility=hidden
 
-# FIXED: Removed -lswiftCompatibility56 which caused the build error
+# STANDARD SWIFT FLAGS (Removed broken compatibility libs)
 iFunnier_LDFLAGS = -lswiftCore -lswiftFoundation -lswiftObjectiveC
 
-iFunnier_FRAMEWORKS = UIKit Foundation AVFoundation
+# Added StoreKit for receipt hook
+iFunnier_FRAMEWORKS = UIKit Foundation AVFoundation StoreKit
 
 include $(THEOS_MAKE_PATH)/tweak.mk

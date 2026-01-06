@@ -8,7 +8,7 @@ jobs:
     name: Build Tweak
     runs-on: macos-latest
     permissions:
-      contents: read
+      contents: write
 
     env:
       THEOS: ${{ github.workspace }}/theos
@@ -43,21 +43,23 @@ jobs:
         run: |
           make package DEBUG=0 FINALPACKAGE=1
           
-          # Create output directory
           mkdir -p ${{ github.workspace }}/build_output
-          
-          # Move the generated deb file to the output directory with a clean name
           mv packages/*.deb ${{ github.workspace }}/build_output/iFunnier.deb
           
-          # Verify build success
           if [ ! -f ${{ github.workspace }}/build_output/iFunnier.deb ]; then
              echo "::error::Build failed! No .deb file found."
              exit 1
           fi
 
-      - name: Upload Tweak Artifact
-        uses: actions/upload-artifact@v4
+      - name: Create Draft Release
+        uses: softprops/action-gh-release@v2
         with:
-          name: iFunnier_Deb
-          path: ${{ github.workspace }}/build_output/iFunnier.deb
-          if-no-files-found: error
+          tag_name: deb-v${{ github.run_number }}
+          name: iFunnier .deb (Build ${{ github.run_number }})
+          files: ${{ github.workspace }}/build_output/iFunnier.deb
+          draft: true
+          body: |
+            ### iFunnier Tweak Build
+            - **Build Number**: ${{ github.run_number }}
+            - **Type**: .deb Package (No IPA injection)
+            - **Status**: Draft Release
